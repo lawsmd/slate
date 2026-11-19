@@ -1,0 +1,26 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1b26; color: #c0caf5;
+    font: 15px/1.5 "Segoe UI", sans-serif; }
+  #ed { box-sizing: border-box; height: 100%; padding: 8px 16px; outline: none; caret-color: #c0caf5; }
+  h1 { margin: 0 0 4px; font-size: 26px; color: #7aa2f7; }
+  p { margin: 4px 0; }
+  pre { margin: 8px 0; padding: 8px 12px; border-radius: 6px; background: #24283b;
+    font: 13px/1.45 "Cascadia Code", Consolas, monospace; }
+  .k { color: #bb9af7; } .s { color: #9ece6a; } .c { color: #565f89; } .n { color: #565f89; margin-right: 12px; }
+  code { padding: 1px 4px; border-radius: 3px; background: #24283b; font: 13px "Cascadia Code", Consolas, monospace; }
+</style>
+<div id="ed" contenteditable spellcheck="false"><h1>slate latency test</h1><p>This page stands in for the editor. It has a <b>heading</b>, some <i>inline</i> <code>marks</code> and a code block.</p><pre><span class="n">1</span><span class="k">func</span> main() {
+<span class="n">2</span>    fmt.Println(<span class="s">"hello"</span>) <span class="c">// a comment</span>
+<span class="n">3</span>}</pre><p id="tail">&gt; </p></div>
+<script>
+  const tail = document.getElementById('tail');
+  document.getElementById('ed').focus();
+  const range = document.createRange();
+  range.selectNodeContents(tail);
+  range.collapse(false);
+  const sel = getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+</script>

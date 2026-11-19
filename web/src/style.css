@@ -1,0 +1,115 @@
+:root {
+  /* Colours derived from the background and foreground follow a theme that sets only those two. */
+  --sl-bg: #1a1b26;
+  --sl-fg: #c0caf5;
+  --sl-dim: color-mix(in srgb, var(--sl-fg) 52%, var(--sl-bg));
+  --sl-accent: #7aa2f7;
+  --sl-code-bg: color-mix(in srgb, var(--sl-fg) 7%, var(--sl-bg));
+  --sl-border: color-mix(in srgb, var(--sl-fg) 22%, var(--sl-bg));
+  --sl-selection: color-mix(in srgb, var(--sl-accent) 38%, var(--sl-bg));
+  --sl-font: "Segoe UI", system-ui, sans-serif;
+  --sl-mono: "Cascadia Code", "Cascadia Mono", Consolas, monospace;
+  --sl-size: 15px;
+  --sl-syn-keyword: #bb9af7;
+  --sl-syn-string: #9ece6a;
+  --sl-syn-comment: color-mix(in srgb, var(--sl-fg) 42%, var(--sl-bg));
+  --sl-syn-number: #ff9e64;
+  --sl-syn-function: #7aa2f7;
+  --sl-syn-type: #2ac3de;
+  --sl-syn-property: #73daca;
+  --sl-syn-operator: #89ddff;
+  --sl-info: #7aa2f7;
+  --sl-note: #bb9af7;
+  --sl-success: #9ece6a;
+  --sl-warning: #e0af68;
+  --sl-error: #f7768e;
+}
+
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--sl-bg); }
+#root { height: 100%; }
+
+/* The #root prefix outranks CodeMirror's own generated rules. */
+#root .cm-editor { height: 100%; background: var(--sl-bg); color: var(--sl-fg);
+  font-family: var(--sl-font); font-size: var(--sl-size); }
+#root .cm-editor.cm-focused { outline: none; }
+#root .cm-scroller { font-family: inherit; line-height: 1.5; overflow: auto; }
+#root .cm-content { padding: 8px 0; caret-color: var(--sl-fg); }
+#root .cm-line { padding: 0 14px; }
+#root .cm-cursor { border-left: 2px solid var(--sl-fg); }
+#root .cm-selectionBackground { background: var(--sl-selection); }
+
+#root .sl-dim { color: var(--sl-dim); }
+
+#root .cm-line.sl-h { font-weight: 700; line-height: 1.3; }
+#root .cm-line.sl-h1 { font-size: 1.8em; padding-top: 0.25em; }
+#root .cm-line.sl-h2 { font-size: 1.5em; padding-top: 0.25em; }
+#root .cm-line.sl-h3 { font-size: 1.25em; padding-top: 0.2em; }
+#root .cm-line.sl-h4 { font-size: 1.1em; }
+#root .cm-line.sl-h5 { font-size: 1em; }
+#root .cm-line.sl-h6 { font-size: 1em; color: var(--sl-dim); }
+
+#root .sl-strong { font-weight: 700; }
+#root .sl-em { font-style: italic; }
+#root .sl-strike { text-decoration: line-through; }
+#root .sl-icode { font-family: var(--sl-mono); font-size: 0.88em; background: var(--sl-code-bg);
+  border-radius: 3px; padding: 1px 4px; }
+#root .sl-link { color: var(--sl-accent); text-decoration: underline; text-underline-offset: 2px; }
+#root .sl-mention { color: var(--sl-accent); background: color-mix(in srgb, var(--sl-accent) 18%, transparent);
+  border-radius: 10px; padding: 0 6px; }
+
+#root .sl-bullet { color: var(--sl-dim); }
+#root .sl-list-num { color: var(--sl-dim); }
+#root .sl-check { display: inline-block; box-sizing: border-box; width: 1em; height: 1em; margin-right: 0.15em;
+  border: 1.5px solid var(--sl-dim); border-radius: 3px; vertical-align: -0.12em; text-align: center;
+  font-size: 0.95em; line-height: 0.85em; cursor: pointer; }
+#root .sl-check-on { background: var(--sl-accent); border-color: var(--sl-accent); color: var(--sl-bg); font-weight: 700; }
+#root .sl-task-done { color: var(--sl-dim); text-decoration: line-through; }
+
+#root .sl-hr { display: inline-block; width: 100%; border-top: 1px solid var(--sl-border); vertical-align: middle; }
+
+#root .cm-line.sl-quote { margin-left: 14px; padding-left: 12px; border-left: 3px solid var(--sl-border);
+  color: color-mix(in srgb, var(--sl-fg) 80%, var(--sl-bg)); }
+
+#root .cm-line.sl-callout { --c: var(--sl-info); margin: 0 14px; padding: 0 12px;
+  border-left: 3px solid var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); }
+#root .cm-line.sl-callout-note { --c: var(--sl-note); }
+#root .cm-line.sl-callout-success { --c: var(--sl-success); }
+#root .cm-line.sl-callout-warning { --c: var(--sl-warning); }
+#root .cm-line.sl-callout-error { --c: var(--sl-error); }
+#root .cm-line.sl-callout.sl-block-first { border-top-right-radius: 6px; padding-top: 4px; }
+#root .cm-line.sl-callout.sl-block-last { border-bottom-right-radius: 6px; padding-bottom: 4px; }
+#root .sl-callout-label, #root .sl-callout-title { color: var(--c); font-weight: 600; }
+
+#root .cm-line.sl-code { position: relative; margin: 0 14px; padding: 0 12px 0 3.6em;
+  background: var(--sl-code-bg); font-family: var(--sl-mono); font-size: 0.88em; line-height: 1.5; }
+#root .cm-line.sl-code[data-ln]::before { content: attr(data-ln); position: absolute; left: 0; width: 2.6em;
+  text-align: right; color: var(--sl-dim); opacity: 0.75; }
+#root .cm-line.sl-code-plain { padding-left: 12px; }
+#root .cm-line.sl-code-open { padding-left: 12px; border-radius: 6px 6px 0 0; color: var(--sl-dim); }
+#root .cm-line.sl-code-close { border-radius: 0 0 6px 6px; }
+#root .cm-line.sl-code-open.sl-code-close { border-radius: 6px; }
+#root .cm-line.sl-code-head { padding-top: 3px; text-align: right; font-family: var(--sl-font); }
+#root .cm-line.sl-code-foot { padding-left: 12px; font-size: 5px; line-height: 8px; }
+#root .sl-lang { padding: 0 7px; border: 1px solid var(--sl-border); border-radius: 4px;
+  color: var(--sl-dim); font-size: 0.9em; cursor: pointer; }
+
+#root .cm-line.sl-table-raw { font-family: var(--sl-mono); font-size: 0.88em; }
+#root .sl-table-wrap { padding: 4px 14px; }
+#root .sl-table { border-collapse: collapse; }
+#root .sl-table th, #root .sl-table td { padding: 3px 12px; border: 1px solid var(--sl-border); text-align: left; }
+#root .sl-table th { background: var(--sl-code-bg); font-weight: 600; }
+
+#root .sl-picker { position: absolute; right: 22px; z-index: 10; width: 190px; padding: 4px;
+  background: var(--sl-bg); border: 1px solid var(--sl-border); border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4); font-size: 0.9em; }
+#root .sl-picker-input { box-sizing: border-box; width: 100%; padding: 3px 6px; outline: none;
+  background: var(--sl-code-bg); border: 1px solid var(--sl-border); border-radius: 4px;
+  color: var(--sl-fg); font: inherit; }
+#root .sl-picker-item { padding: 2px 6px; border-radius: 4px; cursor: pointer; }
+#root .sl-picker-selected { background: var(--sl-selection); }
+
+#root .cm-tooltip { background: var(--sl-bg); border: 1px solid var(--sl-border); border-radius: 6px;
+  color: var(--sl-fg); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4); }
+#root .cm-tooltip-autocomplete ul { font-family: var(--sl-font); }
+#root .cm-tooltip-autocomplete ul li { padding: 2px 8px; }
+#root .cm-tooltip-autocomplete ul li[aria-selected] { background: var(--sl-selection); color: var(--sl-fg); }
