@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"time"
 )
 
@@ -65,10 +66,12 @@ func Launch(opts Options) (*Browser, error) {
 			return nil, err
 		}
 	}
-	dir, err := os.MkdirTemp("", "slate-profile-")
+	sweepProfiles()
+	dir, err := os.MkdirTemp("", profilePrefix)
 	if err != nil {
 		return nil, err
 	}
+	os.WriteFile(filepath.Join(dir, ownerFile), []byte(strconv.Itoa(os.Getpid())), 0o644)
 
 	args := []string{
 		"--headless=new",
@@ -125,6 +128,27 @@ func Launch(opts Options) (*Browser, error) {
 	return b, nil
 }
 
+const (
+	profilePrefix = "slate-profile-"
+	ownerFile     = "slate-owner.pid" // holds the process ID of the program that made the profile
+)
+
+// sweepProfiles deletes the profile directories of programs that exited
+// without closing their browser. A browser whose owner is gone has exited
+// too: it stops when its debugging pipe closes.
+func sweepProfiles() {
+	dirs, _ := filepath.Glob(filepath.Join(os.TempDir(), profilePrefix+"*"))
+	for _, dir := range dirs {
+		data, err := os.ReadFile(filepath.Join(dir, ownerFile))
+		if err != nil {
+			continue // not ours to judge
+		}
+		if pid, err := strconv.Atoi(string(data)); err == nil && !alive(pid) {
+			os.RemoveAll(dir)
+		}
+	}
+}
+
 // Version returns the browser's product string, for example "Edg/157.0.0.0".
 func (b *Browser) Version() string {
 	var v struct {
@@ -136,18 +160,31 @@ func (b *Browser) Version() string {
 
 // NewPage opens a blank page and returns the session ID to address it with.
 func (b *Browser) NewPage() (string, error) {
+	_, session, err := b.OpenPage()
+	return session, err
+}
+
+// OpenPage opens a blank page. It returns the page's target ID, which
+// ClosePage takes, and the session ID to address the page with.
+func (b *Browser) OpenPage() (target, session string, err error) {
 	var created struct {
 		TargetID string `json:"targetId"`
 	}
 	if err := b.Conn.Call("", "Target.createTarget", map[string]any{"url": "about:blank"}, &created); err != nil {
-		return "", err
+		return "", "", err
 	}
 	var attached struct {
 		SessionID string `json:"sessionId"`
 	}
-	err := b.Conn.Call("", "Target.attachToTarget",
+	err = b.Conn.Call("", "Target.attachToTarget",
 		map[string]any{"targetId": created.TargetID, "flatten": true}, &attached)
-	return attached.SessionID, err
+	return created.TargetID, attached.SessionID, err
+}
+
+// ClosePage closes a page that OpenPage opened and ends its subscriptions.
+func (b *Browser) ClosePage(target, session string) error {
+	b.Conn.Forget(session)
+	return b.Conn.Call("", "Target.closeTarget", map[string]any{"targetId": target}, nil)
 }
 
 // Close stops the browser and deletes its profile directory.

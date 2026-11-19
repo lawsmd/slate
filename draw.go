@@ -15,9 +15,26 @@ type frame struct {
 	stride, w, h int
 }
 
+// frames takes the page's screencast frames until the page or the editor
+// stops.
+func (e *Editor) frames(pg *page, ch <-chan json.RawMessage) {
+	for {
+		select {
+		case raw := <-ch:
+			e.receive(pg, raw)
+		case <-pg.conn.Done():
+			return
+		case <-pg.crashed:
+			return
+		case <-e.done:
+			return
+		}
+	}
+}
+
 // receive acknowledges and decodes one screencast frame, then signals
 // Updates. The browser sends no further frame until the last is acknowledged.
-func (e *Editor) receive(raw json.RawMessage) {
+func (e *Editor) receive(pg *page, raw json.RawMessage) {
 	var msg struct {
 		Data      []byte `json:"data"`
 		SessionID int    `json:"sessionId"`
@@ -25,7 +42,7 @@ func (e *Editor) receive(raw json.RawMessage) {
 	if json.Unmarshal(raw, &msg) != nil {
 		return
 	}
-	e.conn.Send(e.sess, "Page.screencastFrameAck", map[string]any{"sessionId": msg.SessionID})
+	pg.conn.Send(pg.sess, "Page.screencastFrameAck", map[string]any{"sessionId": msg.SessionID})
 	img, err := png.Decode(bytes.NewReader(msg.Data))
 	if err != nil {
 		return
@@ -115,8 +132,9 @@ func (e *Editor) Invalidate() {
 }
 
 // SetRect moves and sizes the block. col and row are the terminal cell of
-// its top-left corner, counted from 1.
-func (e *Editor) SetRect(col, row, cols, rows int) error {
+// its top-left corner, counted from 1. Draw uses the new place at once; the
+// page follows a new size shortly after.
+func (e *Editor) SetRect(col, row, cols, rows int) {
 	e.mu.Lock()
 	resized := cols != e.cols || rows != e.rows
 	moved := col != e.col || row != e.row
@@ -126,23 +144,21 @@ func (e *Editor) SetRect(col, row, cols, rows int) error {
 	}
 	e.mu.Unlock()
 	if resized {
-		return e.resize()
+		e.post("SetRect", e.resize)
 	}
-	return nil
 }
 
 // SetCellSize sets the pixel size of one terminal cell. Ask the terminal for
 // it with the escape sequence CSI 16 t.
-func (e *Editor) SetCellSize(width, height int) error {
+func (e *Editor) SetCellSize(width, height int) {
 	if width <= 0 || height <= 0 {
-		return nil
+		return
 	}
 	e.mu.Lock()
 	changed := width != e.cellW || height != e.cellH
 	e.cellW, e.cellH, e.shown = width, height, nil
 	e.mu.Unlock()
 	if changed {
-		return e.resize()
+		e.post("SetCellSize", e.resize)
 	}
-	return nil
 }

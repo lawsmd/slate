@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
+
+	"golang.org/x/sys/windows"
 )
 
 // startWithPipes starts cmd with the two pipe ends inherited. Windows has no
@@ -21,4 +23,16 @@ func startWithPipes(cmd *exec.Cmd, childRead, childWrite *os.File) error {
 	cmd.Args = append(cmd.Args, fmt.Sprintf("--remote-debugging-io-pipes=%d,%d", handles[0], handles[1]))
 	cmd.SysProcAttr = &syscall.SysProcAttr{AdditionalInheritedHandles: handles}
 	return cmd.Start()
+}
+
+// alive reports whether a process with this ID is running.
+func alive(pid int) bool {
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return false
+	}
+	defer windows.CloseHandle(h)
+	var code uint32
+	const stillActive = 259
+	return windows.GetExitCodeProcess(h, &code) == nil && code == stillActive
 }

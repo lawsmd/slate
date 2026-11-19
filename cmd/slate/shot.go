@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -36,6 +37,7 @@ func shot(args []string) error {
 		return err
 	}
 	defer ed.Close()
+	ctx := context.Background()
 	fmt.Fprintln(os.Stderr, "editor ready in", time.Since(start).Round(time.Millisecond))
 
 	for _, word := range strings.Fields(*keys) {
@@ -62,9 +64,7 @@ func shot(args []string) error {
 		if k.Name == "space" {
 			k.Name = " "
 		}
-		if err := ed.Key(k); err != nil {
-			return err
-		}
+		ed.Key(k)
 		time.Sleep(15 * time.Millisecond)
 	}
 	if *blur {
@@ -73,20 +73,20 @@ func shot(args []string) error {
 	time.Sleep(400 * time.Millisecond)
 
 	if *md {
-		s, err := ed.Markdown()
+		s, err := ed.Markdown(ctx)
 		if err != nil {
 			return err
 		}
 		fmt.Println(s)
 	}
 	if *adf {
-		doc, err := ed.ADF()
+		doc, err := ed.ADF(ctx)
 		if err != nil {
 			return err
 		}
 		fmt.Println(string(doc))
 	}
-	png, err := ed.Screenshot()
+	png, err := ed.Screenshot(ctx)
 	if err != nil {
 		return err
 	}

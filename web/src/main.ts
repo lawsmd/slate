@@ -9,6 +9,7 @@ import { tags as t } from "@lezer/highlight";
 import { GFM } from "@lezer/markdown";
 import { toADF } from "./adf";
 import { defaultRender, renderCompartment, renderConfig, trackFocus, type RenderConfig } from "./config";
+import { applyEdit, editMarks, origin, type Edit } from "./edits";
 import { notifyHost, resolveHost } from "./host";
 import { openLanguagePicker } from "./langpicker";
 import { liveField } from "./live";
@@ -86,6 +87,12 @@ const closeFence = EditorView.inputHandler.of((view, from, to, text) => {
   return true;
 });
 
+/** Counts document changes. The host keeps the text it was last sent with its number. */
+let revision = 0;
+
+/** Documents longer than this are not sent with each change; the host asks for them. */
+const sendLimit = 256 * 1024;
+
 const view = new EditorView({
   parent: document.getElementById("root")!,
   state: EditorState.create({
@@ -104,8 +111,18 @@ const view = new EditorView({
       closeFence,
       autocompletion({ override: [mentionSource], icons: false }),
       keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
+      editMarks,
       EditorView.updateListener.of((update) => {
-        if (update.docChanged) notifyHost("change");
+        if (!update.docChanged) return;
+        revision++;
+        const by = update.transactions.map((tr) => tr.annotation(origin)).find((o) => o) ?? "user";
+        const doc = update.state.doc;
+        notifyHost("change", {
+          rev: revision,
+          origin: by,
+          head: update.state.selection.main.head,
+          ...(doc.length <= sendLimit ? { doc: doc.toString() } : {}),
+        });
       }),
     ],
   }),
@@ -121,13 +138,24 @@ interface Settings {
 const api = {
   getMarkdown: (): string => view.state.doc.toString(),
 
-  setMarkdown(markdown: string): void {
+  /** Replaces the document and puts the cursor at `head`. */
+  setMarkdown(markdown: string, head = 0): void {
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: markdown },
-      selection: { anchor: 0 },
+      selection: { anchor: Math.min(head, markdown.length) },
+      annotations: origin.of("host"),
       scrollIntoView: true,
     });
   },
+
+  /** Replaces one exact piece of text and returns the new revision. */
+  edit(edit: Edit, by: string): number {
+    applyEdit(view, edit, by || "host");
+    return revision;
+  },
+
+  /** The document with its revision and the cursor's place in it. */
+  read: () => ({ doc: view.state.doc.toString(), rev: revision, head: view.state.selection.main.head }),
 
   getADF: () => toADF(view.state.doc.toString()),
 

@@ -118,6 +118,7 @@ func TestEditor(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ed.Close()
+	ctx := context.Background()
 
 	select {
 	case <-ed.Updates():
@@ -134,21 +135,15 @@ func TestEditor(t *testing.T) {
 	// Go to the end and type a paragraph with a mention and a code block.
 	keys := []Key{{Name: "End", Mod: Ctrl}, {Name: "Enter"}, {Name: "h"}, {Name: "i"}, {Name: " "}, {Name: "@"}, {Name: "l"}}
 	for _, k := range keys {
-		if err := ed.Key(k); err != nil {
-			t.Fatal(err)
-		}
+		ed.Key(k)
 	}
 	time.Sleep(500 * time.Millisecond) // the completion list asks the host
 	for _, k := range []Key{{Name: "Enter"}, {Name: "Enter"}, {Name: "`"}, {Name: "`"}, {Name: "`"}, {Name: "x"}} {
-		if err := ed.Key(k); err != nil {
-			t.Fatal(err)
-		}
+		ed.Key(k)
 	}
-	if err := ed.Paste(" pasted"); err != nil {
-		t.Fatal(err)
-	}
+	ed.Paste(" pasted")
 
-	md, err := ed.Markdown()
+	md, err := ed.Markdown(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +155,11 @@ func TestEditor(t *testing.T) {
 		t.Fatal("typing should mark the editor modified")
 	}
 
-	raw, err := ed.ADF()
+	if text, rev := ed.Text(); text != want || rev == 0 {
+		t.Fatalf("Text: %q at revision %d", text, rev)
+	}
+
+	raw, err := ed.ADF(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,15 +183,151 @@ func TestEditor(t *testing.T) {
 		t.Fatalf("ADF has no mention: %s", raw)
 	}
 
-	if err := ed.Key(Key{Name: "a", Mod: Ctrl}); err != nil {
-		t.Fatal(err)
-	}
-	if sel, err := ed.Copy(); err != nil || sel != want {
+	ed.Key(Key{Name: "a", Mod: Ctrl})
+	if sel, err := ed.Copy(ctx); err != nil || sel != want {
 		t.Fatalf("Copy after select-all: %q, %v", sel, err)
 	}
 
-	png, err := ed.Screenshot()
+	png, err := ed.Screenshot(ctx)
 	if err != nil || !bytes.HasPrefix(png, []byte("\x89PNG")) {
 		t.Fatalf("Screenshot: %v", err)
+	}
+}
+
+// browserTest skips a test that needs a browser when there is none.
+func browserTest(t *testing.T) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("starts a browser")
+	}
+	if _, err := browser.Find(); err != nil {
+		t.Skip(err)
+	}
+}
+
+// awaitEvent returns the next event of type T, or fails after a wait.
+func awaitEvent[T Event](t *testing.T, ed *Editor) T {
+	t.Helper()
+	timeout := time.After(30 * time.Second)
+	for {
+		select {
+		case ev := <-ed.Events():
+			if got, ok := ev.(T); ok {
+				return got
+			}
+		case <-timeout:
+			var zero T
+			t.Fatalf("no %T event arrived", zero)
+		}
+	}
+}
+
+func TestEdit(t *testing.T) {
+	browserTest(t)
+	ed, err := New(Options{Markdown: "one two three\n", Cols: 40, Rows: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ed.Close()
+	ctx := context.Background()
+	if ed.Modified() {
+		t.Fatal("loading the document should not mark the editor modified")
+	}
+
+	rev, err := ed.Edit(ctx, Edit{Old: "two", New: "2"}, "agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var watched []Event
+	stop := ed.Watch(func(ev Event) { watched = append(watched, ev) })
+	defer stop()
+
+	if ev := awaitEvent[Changed](t, ed); ev.Rev != rev || ev.Origin != "agent" {
+		t.Fatalf("event %+v, want revision %d by agent", ev, rev)
+	}
+	if text, r := ed.Text(); text != "one 2 three\n" || r != rev {
+		t.Fatalf("Text: %q at %d, want revision %d", text, r, rev)
+	}
+	if !ed.Modified() {
+		t.Fatal("an edit should mark the editor modified")
+	}
+
+	if _, err := ed.Edit(ctx, Edit{Old: "absent", New: "x"}, "agent"); err == nil {
+		t.Fatal("an edit of text that is not there should fail")
+	}
+	if _, err := ed.Edit(ctx, Edit{Old: "e", New: "x"}, "agent"); err == nil {
+		t.Fatal("an edit of text that occurs twice should fail")
+	}
+	if _, err := ed.Edit(ctx, Edit{New: "four\n"}, "agent"); err != nil {
+		t.Fatal(err)
+	}
+	if md, _ := ed.Markdown(ctx); md != "one 2 three\nfour\n" {
+		t.Fatalf("after adding at the end: %q", md)
+	}
+	if len(watched) != 1 || watched[0].(Changed).Origin != "agent" {
+		t.Fatalf("a watcher added after the first edit should have seen the second alone: %+v", watched)
+	}
+
+	// Each edit is one undo step.
+	ed.Key(Key{Name: "z", Mod: Ctrl})
+	if md, _ := ed.Markdown(ctx); md != "one 2 three\n" {
+		t.Fatalf("after one undo: %q", md)
+	}
+	ed.Key(Key{Name: "z", Mod: Ctrl})
+	if md, _ := ed.Markdown(ctx); md != "one two three\n" {
+		t.Fatalf("after two undos: %q", md)
+	}
+}
+
+func TestEditorsShareABrowserAndRestart(t *testing.T) {
+	browserTest(t)
+	start := time.Now()
+	a, err := New(Options{Markdown: "first\n", Cols: 40, Rows: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	first := time.Since(start)
+	start = time.Now()
+	b, err := New(Options{Markdown: "second\n", Cols: 40, Rows: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	t.Logf("first editor ready in %v, second in %v", first.Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
+	ctx := context.Background()
+
+	old := a.pg.Load().br
+	if b.pg.Load().br != old {
+		t.Fatal("two editors started two browsers")
+	}
+	a.Key(Key{Name: "End", Mod: Ctrl})
+	a.Key(Key{Name: "x"})
+	if md, err := a.Markdown(ctx); err != nil || md != "first\nx" {
+		t.Fatalf("before the crash: %q, %v", md, err)
+	}
+
+	old.Conn.Send("", "Browser.crash", nil)
+	awaitEvent[Restarted](t, a)
+	awaitEvent[Restarted](t, b)
+
+	if a.pg.Load().br == old || a.pg.Load().br != b.pg.Load().br {
+		t.Fatal("after the crash the editors should share one new browser")
+	}
+	if md, err := a.Markdown(ctx); err != nil || md != "first\nx" {
+		t.Fatalf("first editor after the restart: %q, %v", md, err)
+	}
+	if md, err := b.Markdown(ctx); err != nil || md != "second\n" {
+		t.Fatalf("second editor after the restart: %q, %v", md, err)
+	}
+	// The cursor is where it was: the next character goes after the x.
+	a.Key(Key{Name: "y"})
+	if md, _ := a.Markdown(ctx); md != "first\nxy" {
+		t.Fatalf("typing after the restart: %q", md)
+	}
+	select {
+	case <-a.Updates():
+	case <-time.After(5 * time.Second):
+		t.Fatal("no frame arrived after the restart")
 	}
 }

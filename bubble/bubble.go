@@ -51,7 +51,6 @@ type (
 type Model struct {
 	ed         *slate.Editor
 	x, y, w, h int // the rectangle in window cells, counted from 0
-	queue      chan func()
 	done       chan struct{}
 	dragging   slate.MouseButton
 	draws      int
@@ -66,27 +65,14 @@ type Model struct {
 
 // New wraps an editor. The caller still owns the editor and closes it.
 func New(ed *slate.Editor) *Model {
-	m := &Model{ed: ed, paint: stdout{}, queue: make(chan func(), 1024), done: make(chan struct{})}
-	// Input is sent from one goroutine so that keys reach the editor in the
-	// order they were typed without holding up Bubble Tea's update loop.
-	go func() {
-		for {
-			select {
-			case f := <-m.queue:
-				f()
-			case <-m.done:
-				return
-			}
-		}
-	}()
-	return m
+	return &Model{ed: ed, paint: stdout{}, done: make(chan struct{})}
 }
 
 // Through makes the model write the image with p. Call it before the
 // program starts.
 func (m *Model) Through(p Painter) { m.paint = p }
 
-// Close stops the model's goroutine. It does not close the editor. With a
+// Close stops the model's waiting commands. It does not close the editor. With a
 // detached painter it also removes the image, which would stay behind.
 func (m *Model) Close() {
 	close(m.done)
@@ -278,7 +264,7 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		// A zoom changes the cell size and reports as a resize.
 		return tea.Raw(requestCellSize)
 	case tea.PasteMsg:
-		m.queue <- func() { m.ed.Paste(msg.Content) }
+		m.ed.Paste(msg.Content)
 	case tea.KeyPressMsg:
 		return m.key(msg)
 	case tea.MouseClickMsg:
@@ -339,7 +325,7 @@ func (m *Model) mouse(x, y int, b slate.MouseButton, action slate.MouseAction, m
 		Row:    min(max(y-m.y, 0), m.h-1),
 		Button: b, Action: action, Mod: mods(mod),
 	}
-	m.queue <- func() { m.ed.Mouse(ev) }
+	m.ed.Mouse(ev)
 }
 
 func button(b tea.MouseButton) slate.MouseButton {
@@ -383,16 +369,7 @@ var keyNames = map[rune]string{
 func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 	mod := mods(k.Mod)
 	if mod == slate.Ctrl && (k.Code == 'c' || k.Code == 'x') {
-		result := make(chan string, 1)
-		m.queue <- func() {
-			var s string
-			if k.Code == 'x' {
-				s, _ = m.ed.Cut()
-			} else {
-				s, _ = m.ed.Copy()
-			}
-			result <- s
-		}
+		result := m.ed.Selected(k.Code == 'x')
 		return func() tea.Msg {
 			if s := <-result; s != "" {
 				return tea.SetClipboard(s)()
@@ -401,22 +378,33 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 		}
 	}
 
-	key := slate.Key{Mod: mod}
+	switch key, text, ok := translate(k); {
+	case text != "":
+		m.ed.Paste(text)
+	case ok:
+		m.ed.Key(key)
+	}
+	return nil
+}
+
+// translate turns a Bubble Tea key press into the editor's key, or into
+// text to insert when the press carries more than one character. ok is false
+// for a press the editor has no use for.
+func translate(k tea.KeyPressMsg) (key slate.Key, text string, ok bool) {
+	key.Mod = mods(k.Mod)
 	switch name, special := keyNames[k.Code]; {
 	case special:
 		key.Name = name
 	case utf8.RuneCountInString(k.Text) > 1:
 		// Composed input arrives as a string.
-		m.queue <- func() { m.ed.Paste(k.Text) }
-		return nil
+		return slate.Key{}, k.Text, false
 	case k.Text != "":
 		key.Name, key.Text = k.Text, k.Text
 		key.Mod &^= slate.Shift // the shift is already in the character
 	case k.Code >= 0x20 && k.Code < utf8.MaxRune && utf8.ValidRune(k.Code) && k.Code < 0xE000:
 		key.Name = string(k.Code)
 	default:
-		return nil
+		return slate.Key{}, "", false
 	}
-	m.queue <- func() { m.ed.Key(key) }
-	return nil
+	return key, "", true
 }

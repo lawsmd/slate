@@ -177,6 +177,13 @@ func (h *host) run(markdown string) (json.RawMessage, error) {
 	return h.result, h.err
 }
 
+// eventMsg is something the editor reported.
+type eventMsg struct{ slate.Event }
+
+func (h *host) waitEvent() tea.Cmd {
+	return func() tea.Msg { return eventMsg{<-h.ed.Events()} }
+}
+
 // themeMsg is the theme read again from Windows Terminal's settings.
 type themeMsg slate.Theme
 
@@ -190,7 +197,7 @@ func watchTheme() tea.Cmd {
 }
 
 func (h *host) Init() tea.Cmd {
-	cmds := []tea.Cmd{h.block.Init(), tea.RequestBackgroundColor, tea.RequestForegroundColor}
+	cmds := []tea.Cmd{h.block.Init(), h.waitEvent(), tea.RequestBackgroundColor, tea.RequestForegroundColor}
 	if h.follow {
 		cmds = append(cmds, watchTheme())
 	}
@@ -204,6 +211,14 @@ func (h *host) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Row 0 is the title, the last row the status line, and a border
 		// surrounds the block.
 		return h, tea.Batch(h.block.SetRect(1, 2, h.w-2, h.h-4), h.block.Update(msg))
+	case eventMsg:
+		switch ev := msg.Event.(type) {
+		case slate.Restarted:
+			h.status = warn.Render("the editor's browser stopped and was started again")
+		case slate.Failed:
+			h.status = warn.Render(ev.Op + " failed: " + ev.Err.Error())
+		}
+		return h, h.waitEvent()
 	case themeMsg:
 		if t := slate.Theme(msg); t.Background != h.theme.Background || t.Foreground != h.theme.Foreground ||
 			t.Selection != h.theme.Selection || t.MonoFont != h.theme.MonoFont {
@@ -243,11 +258,13 @@ func (h *host) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (h *host) save() (tea.Model, tea.Cmd) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 	if h.path == "" {
-		h.result, h.err = h.ed.ADF()
+		h.result, h.err = h.ed.ADF(ctx)
 		return h, tea.Quit
 	}
-	md, err := h.ed.Markdown()
+	md, err := h.ed.Markdown(ctx)
 	if err == nil {
 		if h.crlf {
 			md = strings.ReplaceAll(md, "\n", "\r\n")

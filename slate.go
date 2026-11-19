@@ -2,6 +2,11 @@
 // applications. A headless browser runs the editor; slate forwards the
 // host's keys and mouse events to it and returns each changed frame as Sixel
 // for the host to write into a rectangle of the terminal.
+//
+// One browser serves every editor of a process, each in its own page. Calls
+// that change the editor return at once and reach the page in the order they
+// were made. Calls that return something from the page wait for it and take
+// a context.
 package slate
 
 import (
@@ -10,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,6 +29,9 @@ import (
 
 //go:embed web/dist/index.html
 var pageHTML string
+
+// ErrClosed is returned by calls on an editor after Close.
+var ErrClosed = errors.New("slate: the editor is closed")
 
 // Style is how one Markdown construct is drawn.
 type Style string
@@ -80,20 +89,62 @@ type Options struct {
 	CellWidth, CellHeight int
 
 	// BrowserPath is the browser executable. Empty means look for Edge,
-	// then Chrome.
+	// then Chrome. The editors of a process share one browser, so the path
+	// counts only when it starts that browser.
 	BrowserPath string
 }
 
-// Editor is one editing block backed by a headless browser page.
+// Event is something an editor reports through Events: Changed, Restarted or
+// Failed.
+type Event interface{ event() }
+
+// Changed says the document changed.
+type Changed struct {
+	// Rev is the document's revision after the change. It rises by one
+	// with each change.
+	Rev uint64
+	// Origin is who made the change: "user" for the keyboard and mouse,
+	// "host" for SetMarkdown, or the name given to Edit.
+	Origin string
+}
+
+// Restarted says the browser or the editor's page stopped and slate started
+// it again with the same document, theme and place.
+type Restarted struct{}
+
+// Failed says the editor could not carry out a call that returns no error
+// itself, such as Key or SetTheme. Op names the call. With Op "restart" the
+// editor could not be started again and is of no further use.
+type Failed struct {
+	Op  string
+	Err error
+}
+
+func (Changed) event()   {}
+func (Restarted) event() {}
+func (Failed) event()    {}
+
+// page is one loaded editor page in a browser.
+type page struct {
+	br      *browser.Browser
+	conn    *browser.Conn
+	target  string
+	sess    string
+	ready   chan struct{} // closed when the page's script has started
+	crashed chan struct{} // closed when the page's process crashed
+
+	readyOnce, crashOnce sync.Once
+}
+
+// Editor is one editing block backed by a page of the shared browser.
 type Editor struct {
-	br   *browser.Browser
-	conn *browser.Conn
-	sess string
 	opts Options
+	pg   atomic.Pointer[page]
 
 	updates  chan struct{}
+	events   chan Event
+	queue    chan func() // calls for the page, carried out in order by work
 	done     chan struct{}
-	ready    chan struct{}
 	modified atomic.Bool
 	close    sync.Once
 
@@ -105,18 +156,37 @@ type Editor struct {
 	shown        []byte // the pixels of the frame last drawn
 	enc          sixel.Encoder
 	click        clickState
+
+	// What a new page needs to look like the old one.
+	theme  map[string]string
+	render Render
+	focus  bool
+	doc    string // the document as the page last sent it
+	head   int    // the cursor's offset in doc
+
+	watchers map[int]func(Event)
+	watchID  int
+
+	rev     uint64 // the revision of the newest change
+	docRev  uint64 // the revision that doc holds
+	revBase uint64 // rev when the current page was loaded; the page counts from 0
+	loading bool   // the page is being loaded; its changes are not the user's
 }
 
-// New starts a browser and loads the editor.
+// New opens an editor. The first editor of a process starts the browser,
+// unless Warm did so before.
 func New(opts Options) (*Editor, error) {
 	e := &Editor{
 		opts:    opts,
 		updates: make(chan struct{}, 1),
+		events:  make(chan Event, 64),
+		queue:   make(chan func(), 1024),
 		done:    make(chan struct{}),
-		ready:   make(chan struct{}),
 		col:     max(opts.Col, 1), row: max(opts.Row, 1),
 		cols: opts.Cols, rows: opts.Rows,
 		cellW: opts.CellWidth, cellH: opts.CellHeight,
+		theme: opts.Theme.vars(), render: opts.Render, focus: true,
+		doc: opts.Markdown,
 	}
 	if e.cols <= 0 {
 		e.cols = 80
@@ -128,26 +198,45 @@ func New(opts Options) (*Editor, error) {
 		e.cellW, e.cellH = 10, 20
 	}
 
-	br, err := browser.Launch(browser.Options{Path: opts.BrowserPath})
+	br, err := acquire(opts.BrowserPath)
 	if err != nil {
 		return nil, err
 	}
-	e.br, e.conn = br, br.Conn
-	if err := e.load(); err != nil {
-		br.Close()
+	pg, err := e.open(br)
+	if err != nil {
+		release()
 		return nil, err
 	}
+	e.pg.Store(pg)
+	go e.work()
+	go e.watch(pg)
 	return e, nil
 }
 
-func (e *Editor) load() error {
-	var err error
-	if e.sess, err = e.br.NewPage(); err != nil {
-		return err
+// open makes a page in br and loads the editor into it with the document,
+// theme and focus the Editor holds.
+func (e *Editor) open(br *browser.Browser) (*page, error) {
+	target, sess, err := br.OpenPage()
+	if err != nil {
+		return nil, err
 	}
-	bindings := e.conn.Subscribe(e.sess, "Runtime.bindingCalled", 256)
-	frames := e.conn.Subscribe(e.sess, "Page.screencastFrame", 64)
-	go e.listen(bindings, frames)
+	pg := &page{
+		br: br, conn: br.Conn, target: target, sess: sess,
+		ready: make(chan struct{}), crashed: make(chan struct{}),
+	}
+	if err := e.load(pg); err != nil {
+		br.ClosePage(target, sess)
+		return nil, err
+	}
+	return pg, nil
+}
+
+func (e *Editor) load(pg *page) error {
+	pg.conn.Handle(pg.sess, "Runtime.bindingCalled", func(raw json.RawMessage) { e.fromPage(pg, raw) })
+	pg.conn.Handle(pg.sess, "Inspector.targetCrashed", func(json.RawMessage) {
+		pg.crashOnce.Do(func() { close(pg.crashed) })
+	})
+	go e.frames(pg, pg.conn.Subscribe(pg.sess, "Page.screencastFrame", 64))
 
 	var tree struct {
 		FrameTree struct {
@@ -161,6 +250,7 @@ func (e *Editor) load() error {
 		params any
 		result any
 	}{
+		{"Inspector.enable", nil, nil},
 		{"Page.enable", nil, nil},
 		{"Runtime.enable", nil, nil},
 		{"Runtime.addBinding", map[string]any{"name": "slateHost"}, nil},
@@ -168,84 +258,102 @@ func (e *Editor) load() error {
 		{"Page.getFrameTree", nil, &tree},
 	}
 	for _, s := range steps {
-		if err := e.conn.Call(e.sess, s.method, s.params, s.result); err != nil {
+		if err := pg.conn.Call(pg.sess, s.method, s.params, s.result); err != nil {
 			return err
 		}
 	}
-	if err := e.resize(); err != nil {
+	if err := e.resize(pg); err != nil {
 		return err
 	}
-	err = e.conn.Call(e.sess, "Page.setDocumentContent",
+	err := pg.conn.Call(pg.sess, "Page.setDocumentContent",
 		map[string]any{"frameId": tree.FrameTree.Frame.ID, "html": pageHTML}, nil)
 	if err != nil {
 		return err
 	}
 	select {
-	case <-e.ready:
+	case <-pg.ready:
+	case <-pg.conn.Done():
+		return browser.ErrClosed
 	case <-time.After(15 * time.Second):
 		return errors.New("slate: the editor page did not start")
 	}
 
-	settings := map[string]any{"theme": e.opts.Theme.vars(), "render": e.opts.Render}
-	if err := e.eval(nil, "slate.configure", settings); err != nil {
+	e.mu.Lock()
+	settings := map[string]any{"theme": maps.Clone(e.theme), "render": e.render}
+	doc, head, focus := e.doc, e.head, e.focus
+	e.loading, e.revBase = true, e.rev
+	e.mu.Unlock()
+	defer func() {
+		e.mu.Lock()
+		e.loading = false
+		e.mu.Unlock()
+	}()
+
+	if err := e.eval(pg, nil, "slate.configure", settings); err != nil {
 		return err
 	}
-	if e.opts.Markdown != "" {
-		if err := e.SetMarkdown(e.opts.Markdown); err != nil {
+	if doc != "" {
+		if err := e.eval(pg, nil, "slate.setMarkdown", doc, head); err != nil {
 			return err
 		}
 	}
-	if err := e.Focus(true); err != nil {
+	if err := e.eval(pg, nil, "slate.focus", focus); err != nil {
 		return err
 	}
-	e.modified.Store(false)
-	return e.conn.Call(e.sess, "Page.startScreencast", map[string]any{"format": "png", "everyNthFrame": 1}, nil)
+	return pg.conn.Call(pg.sess, "Page.startScreencast", map[string]any{"format": "png", "everyNthFrame": 1}, nil)
 }
 
 // resize makes the page as large as the block.
-func (e *Editor) resize() error {
+func (e *Editor) resize(pg *page) error {
 	e.mu.Lock()
 	w, h := e.cols*e.cellW, e.rows*e.cellH
 	e.mu.Unlock()
-	return e.conn.Call(e.sess, "Emulation.setDeviceMetricsOverride",
+	return pg.conn.Call(pg.sess, "Emulation.setDeviceMetricsOverride",
 		map[string]any{"width": w, "height": h, "deviceScaleFactor": 1, "mobile": false}, nil)
 }
 
-// listen handles messages from the page and frames from the screencast.
-func (e *Editor) listen(bindings, frames <-chan json.RawMessage) {
-	var readyOnce sync.Once
-	for {
-		select {
-		case <-e.done:
-			return
-		case raw := <-bindings:
-			var call struct {
-				Name    string `json:"name"`
-				Payload string `json:"payload"`
-			}
-			var msg struct {
-				Type  string `json:"type"`
-				ID    int    `json:"id"`
-				Query string `json:"query"`
-			}
-			if json.Unmarshal(raw, &call) != nil || json.Unmarshal([]byte(call.Payload), &msg) != nil {
-				continue
-			}
-			switch msg.Type {
-			case "ready":
-				readyOnce.Do(func() { close(e.ready) })
-			case "change":
-				e.modified.Store(true)
-			case "mentions":
-				go e.answerMentions(msg.ID, msg.Query)
-			}
-		case raw := <-frames:
-			e.receive(raw)
+// fromPage handles one message from the page's script. It runs on the
+// connection's reading goroutine, so a change is recorded before a later
+// answer from the page reaches its caller.
+func (e *Editor) fromPage(pg *page, raw json.RawMessage) {
+	var call struct {
+		Name    string `json:"name"`
+		Payload string `json:"payload"`
+	}
+	var msg struct {
+		Type   string  `json:"type"`
+		ID     int     `json:"id"`
+		Query  string  `json:"query"`
+		Rev    uint64  `json:"rev"`
+		Origin string  `json:"origin"`
+		Head   int     `json:"head"`
+		Doc    *string `json:"doc"`
+	}
+	if json.Unmarshal(raw, &call) != nil || json.Unmarshal([]byte(call.Payload), &msg) != nil {
+		return
+	}
+	switch msg.Type {
+	case "ready":
+		pg.readyOnce.Do(func() { close(pg.ready) })
+	case "change":
+		e.mu.Lock()
+		e.rev = e.revBase + msg.Rev
+		e.head = msg.Head
+		if msg.Doc != nil {
+			e.doc, e.docRev = *msg.Doc, e.rev
 		}
+		rev, loading := e.rev, e.loading
+		e.mu.Unlock()
+		if !loading {
+			e.modified.Store(true)
+			e.emit(Changed{Rev: rev, Origin: msg.Origin})
+		}
+	case "mentions":
+		go e.answerMentions(pg, msg.ID, msg.Query)
 	}
 }
 
-func (e *Editor) answerMentions(id int, query string) {
+func (e *Editor) answerMentions(pg *page, id int, query string) {
 	users := []Mention{}
 	if e.opts.Mentions != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
@@ -254,12 +362,164 @@ func (e *Editor) answerMentions(id int, query string) {
 			users = found
 		}
 	}
-	e.eval(nil, "slate.resolve", id, users)
+	e.eval(pg, nil, "slate.resolve", id, users)
+}
+
+// emit tells the watchers of an event and queues it for the host. A host
+// that reads none loses the oldest news first.
+func (e *Editor) emit(ev Event) {
+	e.mu.Lock()
+	fns := make([]func(Event), 0, len(e.watchers))
+	for _, fn := range e.watchers {
+		fns = append(fns, fn)
+	}
+	e.mu.Unlock()
+	for _, fn := range fns {
+		fn(ev)
+	}
+	for {
+		select {
+		case e.events <- ev:
+			return
+		default:
+		}
+		select {
+		case <-e.events:
+		default:
+		}
+	}
+}
+
+// Events delivers what the editor reports: Changed, Restarted and Failed. A
+// host need not read it. The channel holds the newest 64 events.
+func (e *Editor) Events() <-chan Event { return e.events }
+
+// Watch calls fn with every event from now on, besides queueing it for
+// Events, and returns a function that ends that. It serves a second
+// observer, such as a program that follows the document from outside the
+// host. fn runs on the editor's own goroutines: it must return quickly and
+// must not call the editor.
+func (e *Editor) Watch(fn func(Event)) (stop func()) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.watchers == nil {
+		e.watchers = map[int]func(Event){}
+	}
+	e.watchID++
+	id := e.watchID
+	e.watchers[id] = fn
+	return func() {
+		e.mu.Lock()
+		delete(e.watchers, id)
+		e.mu.Unlock()
+	}
+}
+
+// work carries out the queued calls one at a time.
+func (e *Editor) work() {
+	for {
+		select {
+		case f := <-e.queue:
+			f()
+		case <-e.done:
+			return
+		}
+	}
+}
+
+// post queues a call that returns nothing to the host. A failure is reported
+// as a Failed event, except when the browser has gone: then a restart is on
+// its way and reports for itself.
+func (e *Editor) post(op string, f func(pg *page) error) {
+	run := func() {
+		if err := f(e.pg.Load()); err != nil && !errors.Is(err, browser.ErrClosed) {
+			e.emit(Failed{Op: op, Err: err})
+		}
+	}
+	select {
+	case e.queue <- run:
+	case <-e.done:
+	}
+}
+
+// ask queues a call and waits for its result.
+func ask[T any](ctx context.Context, e *Editor, f func(pg *page) (T, error)) (T, error) {
+	type result struct {
+		v   T
+		err error
+	}
+	var zero T
+	ch := make(chan result, 1)
+	run := func() {
+		v, err := f(e.pg.Load())
+		ch <- result{v, err}
+	}
+	select {
+	case e.queue <- run:
+	case <-e.done:
+		return zero, ErrClosed
+	case <-ctx.Done():
+		return zero, ctx.Err()
+	}
+	select {
+	case r := <-ch:
+		return r.v, r.err
+	case <-e.done:
+		return zero, ErrClosed
+	case <-ctx.Done():
+		return zero, ctx.Err()
+	}
+}
+
+// watch waits for the page to stop and queues its restart.
+func (e *Editor) watch(pg *page) {
+	select {
+	case <-pg.conn.Done():
+	case <-pg.crashed:
+	case <-e.done:
+		return
+	}
+	e.post("restart", func(*page) error {
+		e.restart(pg)
+		return nil
+	})
+}
+
+// restart opens a new page in place of old, in a new browser when the old
+// one has gone.
+func (e *Editor) restart(old *page) {
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-time.After(time.Duration(attempt) * 500 * time.Millisecond):
+			case <-e.done:
+				return
+			}
+		}
+		var br *browser.Browser
+		if br, err = replace(old.br, e.opts.BrowserPath); err != nil {
+			continue
+		}
+		if br == old.br {
+			br.ClosePage(old.target, old.sess) // the browser lives; only the page crashed
+		}
+		var pg *page
+		if pg, err = e.open(br); err != nil {
+			continue
+		}
+		e.pg.Store(pg)
+		e.Invalidate()
+		go e.watch(pg)
+		e.emit(Restarted{})
+		return
+	}
+	e.emit(Failed{Op: "restart", Err: err})
 }
 
 // eval calls a function in the page with JSON arguments and decodes its
 // return value into out, which may be nil.
-func (e *Editor) eval(out any, fn string, args ...any) error {
+func (e *Editor) eval(pg *page, out any, fn string, args ...any) error {
 	parts := make([]string, len(args))
 	for i, a := range args {
 		b, err := json.Marshal(a)
@@ -279,7 +539,7 @@ func (e *Editor) eval(out any, fn string, args ...any) error {
 			} `json:"exception"`
 		} `json:"exceptionDetails"`
 	}
-	err := e.conn.Call(e.sess, "Runtime.evaluate", map[string]any{
+	err := pg.conn.Call(pg.sess, "Runtime.evaluate", map[string]any{
 		"expression":    fn + "(" + strings.Join(parts, ",") + ")",
 		"returnByValue": true,
 		"awaitPromise":  true,
@@ -296,24 +556,75 @@ func (e *Editor) eval(out any, fn string, args ...any) error {
 	return json.Unmarshal(res.Result.Value, out)
 }
 
-// Markdown returns the document.
-func (e *Editor) Markdown() (string, error) {
-	var s string
-	err := e.eval(&s, "slate.getMarkdown")
+// get queues a call of a page function and waits for what it returns.
+func get[T any](ctx context.Context, e *Editor, fn string, args ...any) (T, error) {
+	return ask(ctx, e, func(pg *page) (T, error) {
+		var v T
+		err := e.eval(pg, &v, fn, args...)
+		return v, err
+	})
+}
+
+// Markdown returns the document. It asks the page, after every call made
+// before it has been carried out.
+func (e *Editor) Markdown(ctx context.Context) (string, error) {
+	s, err := get[string](ctx, e, "slate.getMarkdown")
+	if errors.Is(err, browser.ErrClosed) {
+		// The browser has gone. The copy kept here is the document unless
+		// it was too long to be sent with its last change.
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		if e.docRev == e.rev {
+			return e.doc, nil
+		}
+	}
 	return s, err
 }
 
+// Text returns the document as the page last reported it, with its
+// revision, and asks the page nothing. A key just sent may not show in it
+// yet. A document longer than 256 KB is not reported with each change, and
+// Text then returns an older revision than Changed events name.
+func (e *Editor) Text() (markdown string, rev uint64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.doc, e.docRev
+}
+
 // SetMarkdown replaces the document and puts the cursor at its start.
-func (e *Editor) SetMarkdown(markdown string) error {
-	return e.eval(nil, "slate.setMarkdown", markdown)
+func (e *Editor) SetMarkdown(markdown string) {
+	e.post("SetMarkdown", func(pg *page) error { return e.eval(pg, nil, "slate.setMarkdown", markdown) })
+}
+
+// Edit is one replacement of exact text.
+type Edit struct {
+	// Old is the text to replace. It must occur exactly once in the
+	// document. Empty adds New at the end.
+	Old string `json:"old"`
+	New string `json:"new"`
+}
+
+// Edit replaces one piece of the document, as another writer than the user
+// would: the change is one undo step, the user's cursor keeps its place in
+// the text around it, and the new text is highlighted for a few seconds.
+// origin names the writer in the Changed event. Edit returns the document's
+// new revision, or an error when Old is absent or occurs more than once.
+func (e *Editor) Edit(ctx context.Context, edit Edit, origin string) (uint64, error) {
+	return ask(ctx, e, func(pg *page) (uint64, error) {
+		var rev uint64
+		if err := e.eval(pg, &rev, "slate.edit", edit, origin); err != nil {
+			return 0, err
+		}
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		return e.revBase + rev, nil
+	})
 }
 
 // ADF returns the document as Atlassian Document Format JSON, the body of a
 // Jira Cloud comment.
-func (e *Editor) ADF() (json.RawMessage, error) {
-	var doc json.RawMessage
-	err := e.eval(&doc, "slate.getADF")
-	return doc, err
+func (e *Editor) ADF(ctx context.Context) (json.RawMessage, error) {
+	return get[json.RawMessage](ctx, e, "slate.getADF")
 }
 
 // Modified reports whether the document changed since New or MarkSaved.
@@ -324,33 +635,55 @@ func (e *Editor) MarkSaved() { e.modified.Store(false) }
 
 // Focus shows or hides the cursor. Without focus no Markdown syntax is
 // revealed.
-func (e *Editor) Focus(on bool) error { return e.eval(nil, "slate.focus", on) }
-
-// SetRender changes how constructs are drawn.
-func (e *Editor) SetRender(r Render) error {
-	return e.eval(nil, "slate.configure", map[string]any{"render": r})
+func (e *Editor) Focus(on bool) {
+	e.mu.Lock()
+	e.focus = on
+	e.mu.Unlock()
+	e.post("Focus", func(pg *page) error { return e.eval(pg, nil, "slate.focus", on) })
 }
 
-// SetTheme changes colours and fonts.
-func (e *Editor) SetTheme(t Theme) error {
-	return e.eval(nil, "slate.configure", map[string]any{"theme": t.vars()})
+// SetRender changes how constructs are drawn.
+func (e *Editor) SetRender(r Render) {
+	e.mu.Lock()
+	e.render = r
+	e.mu.Unlock()
+	e.post("SetRender", func(pg *page) error {
+		return e.eval(pg, nil, "slate.configure", map[string]any{"render": r})
+	})
+}
+
+// SetTheme changes colours and fonts. Empty fields keep what they were.
+func (e *Editor) SetTheme(t Theme) {
+	vars := t.vars()
+	e.mu.Lock()
+	maps.Copy(e.theme, vars)
+	e.mu.Unlock()
+	e.post("SetTheme", func(pg *page) error {
+		return e.eval(pg, nil, "slate.configure", map[string]any{"theme": vars})
+	})
 }
 
 // Screenshot returns the editor's current frame as a PNG.
-func (e *Editor) Screenshot() ([]byte, error) {
-	var res struct {
-		Data []byte `json:"data"`
-	}
-	err := e.conn.Call(e.sess, "Page.captureScreenshot", map[string]any{"format": "png"}, &res)
-	return res.Data, err
+func (e *Editor) Screenshot(ctx context.Context) ([]byte, error) {
+	return ask(ctx, e, func(pg *page) ([]byte, error) {
+		var res struct {
+			Data []byte `json:"data"`
+		}
+		err := pg.conn.Call(pg.sess, "Page.captureScreenshot", map[string]any{"format": "png"}, &res)
+		return res.Data, err
+	})
 }
 
-// Close stops the browser.
+// Close closes the editor's page. The browser stops with the last editor,
+// unless Warm keeps it.
 func (e *Editor) Close() error {
 	var err error
 	e.close.Do(func() {
 		close(e.done)
-		err = e.br.Close()
+		if pg := e.pg.Load(); pg != nil {
+			pg.br.ClosePage(pg.target, pg.sess)
+		}
+		err = release()
 	})
 	return err
 }

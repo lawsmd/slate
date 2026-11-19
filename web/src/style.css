@@ -40,6 +40,10 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--sl-bg)
 
 #root .sl-dim { color: var(--sl-dim); }
 
+/* Text another program wrote a moment ago. */
+#root .sl-edited { background: color-mix(in srgb, var(--sl-edited, var(--sl-success)) 28%, transparent);
+  border-radius: 2px; }
+
 #root .cm-line.sl-h { font-weight: 700; line-height: 1.3; }
 #root .cm-line.sl-h1 { font-size: 1.8em; padding-top: 0.25em; }
 #root .cm-line.sl-h2 { font-size: 1.5em; padding-top: 0.25em; }

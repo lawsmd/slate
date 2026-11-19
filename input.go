@@ -1,6 +1,7 @@
 package slate
 
 import (
+	"context"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -37,9 +38,8 @@ var keyCodes = map[string]int{
 	"F7": 118, "F8": 119, "F9": 120, "F10": 121, "F11": 122, "F12": 123,
 }
 
-// Key sends a key press to the editor. It returns once the editor has
-// handled the key.
-func (e *Editor) Key(k Key) error {
+// Key sends a key press to the editor.
+func (e *Editor) Key(k Key) {
 	down := map[string]any{"type": "rawKeyDown", "key": k.Name, "modifiers": int(k.Mod)}
 	up := map[string]any{"type": "keyUp", "key": k.Name, "modifiers": int(k.Mod)}
 
@@ -80,10 +80,13 @@ func (e *Editor) Key(k Key) error {
 		down["type"] = "keyDown"
 		down["text"] = text
 	}
-	if err := e.conn.Call(e.sess, "Input.dispatchKeyEvent", down, nil); err != nil {
-		return err
-	}
-	return e.conn.Send(e.sess, "Input.dispatchKeyEvent", up)
+	e.post("Key", func(pg *page) error {
+		// Waiting for the answer keeps the next call behind this key.
+		if err := pg.conn.Call(pg.sess, "Input.dispatchKeyEvent", down, nil); err != nil {
+			return err
+		}
+		return pg.conn.Send(pg.sess, "Input.dispatchKeyEvent", up)
+	})
 }
 
 // MouseAction is what the mouse did.
@@ -134,9 +137,9 @@ var buttonBits = [...]int{0, 1, 4, 2}
 
 // Mouse sends a mouse event to the editor. A terminal reports the mouse per
 // cell, so the event is placed at the centre of the cell.
-func (e *Editor) Mouse(m Mouse) error {
+func (e *Editor) Mouse(m Mouse) {
 	if m.Button < NoButton || m.Button > RightButton {
-		return nil
+		return
 	}
 	e.mu.Lock()
 	x := m.Col*e.cellW + e.cellW/2
@@ -167,25 +170,44 @@ func (e *Editor) Mouse(m Mouse) error {
 	case WheelDown:
 		params["type"], params["button"], params["deltaX"], params["deltaY"] = "mouseWheel", "none", 0, wheelStep
 	default:
-		return nil
+		return
 	}
-	return e.conn.Send(e.sess, "Input.dispatchMouseEvent", params)
+	e.post("Mouse", func(pg *page) error {
+		return pg.conn.Send(pg.sess, "Input.dispatchMouseEvent", params)
+	})
 }
 
 // Paste inserts text at the cursor, replacing the selection.
-func (e *Editor) Paste(text string) error { return e.eval(nil, "slate.paste", text) }
+func (e *Editor) Paste(text string) {
+	e.post("Paste", func(pg *page) error { return e.eval(pg, nil, "slate.paste", text) })
+}
 
 // Copy returns the selected text. The terminal cannot select text inside the
 // block, so the host puts this on the clipboard itself.
-func (e *Editor) Copy() (string, error) {
-	var s string
-	err := e.eval(&s, "slate.selection", false)
-	return s, err
+func (e *Editor) Copy(ctx context.Context) (string, error) {
+	return get[string](ctx, e, "slate.selection", false)
 }
 
 // Cut returns the selected text and removes it from the document.
-func (e *Editor) Cut() (string, error) {
-	var s string
-	err := e.eval(&s, "slate.selection", true)
-	return s, err
+func (e *Editor) Cut(ctx context.Context) (string, error) {
+	return get[string](ctx, e, "slate.selection", true)
+}
+
+// Selected takes the selected text as Copy does, or as Cut does with cut
+// set, without waiting: the text arrives on the returned channel, empty
+// when there is none. The selection is read in the order of the calls, so
+// keys sent after Selected do not change what it returns.
+func (e *Editor) Selected(cut bool) <-chan string {
+	out := make(chan string, 1)
+	run := func() {
+		var s string
+		e.eval(e.pg.Load(), &s, "slate.selection", cut)
+		out <- s
+	}
+	select {
+	case e.queue <- run:
+	case <-e.done:
+		out <- ""
+	}
+	return out
 }

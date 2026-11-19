@@ -6,12 +6,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 )
 
 // CallTimeout bounds how long Call waits for the browser to answer.
 const CallTimeout = 15 * time.Second
+
+// ErrClosed is in the error of every call made after the browser went away.
+var ErrClosed = errors.New("devtools pipe closed")
 
 // Conn speaks the DevTools protocol over the browser's debugging pipe.
 // Each message is one JSON object followed by a NUL byte.
@@ -23,6 +27,7 @@ type Conn struct {
 	next    int64
 	pending map[int64]chan reply
 	subs    map[string]chan json.RawMessage
+	handles map[string]func(json.RawMessage)
 	err     error
 	done    chan struct{}
 }
@@ -55,6 +60,7 @@ func NewConn(r io.Reader, w io.WriteCloser) *Conn {
 		w:       w,
 		pending: map[int64]chan reply{},
 		subs:    map[string]chan json.RawMessage{},
+		handles: map[string]func(json.RawMessage){},
 		done:    make(chan struct{}),
 	}
 	go c.read(r)
@@ -66,7 +72,7 @@ func (c *Conn) read(r io.Reader) {
 	for {
 		msg, err := br.ReadBytes(0)
 		if err != nil {
-			c.fail(fmt.Errorf("devtools pipe closed: %w", err))
+			c.fail(fmt.Errorf("%w: %v", ErrClosed, err))
 			return
 		}
 		var env envelope
@@ -76,7 +82,11 @@ func (c *Conn) read(r io.Reader) {
 		c.mu.Lock()
 		if env.Method != "" {
 			ch := c.subs[env.SessionID+"|"+env.Method]
+			handle := c.handles[env.SessionID+"|"+env.Method]
 			c.mu.Unlock()
+			if handle != nil {
+				handle(env.Params)
+			}
 			if ch != nil {
 				select {
 				case ch <- env.Params:
@@ -176,6 +186,36 @@ func (c *Conn) Subscribe(session, method string, buffer int) <-chan json.RawMess
 	c.mu.Unlock()
 	return ch
 }
+
+// Handle calls fn with the params of each such event, in the order the
+// browser sent them and before any later answer reaches its caller. fn runs
+// on the reading goroutine and must not block or call the connection. No
+// event is dropped. Call Handle before enabling the event's domain.
+func (c *Conn) Handle(session, method string, fn func(json.RawMessage)) {
+	c.mu.Lock()
+	c.handles[session+"|"+method] = fn
+	c.mu.Unlock()
+}
+
+// Forget ends every subscription and handler of one session.
+func (c *Conn) Forget(session string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	prefix := session + "|"
+	for key := range c.subs {
+		if strings.HasPrefix(key, prefix) {
+			delete(c.subs, key)
+		}
+	}
+	for key := range c.handles {
+		if strings.HasPrefix(key, prefix) {
+			delete(c.handles, key)
+		}
+	}
+}
+
+// Done is closed when the browser has gone away.
+func (c *Conn) Done() <-chan struct{} { return c.done }
 
 // Close closes the write side of the pipe.
 func (c *Conn) Close() error { return c.w.Close() }
