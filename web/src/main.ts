@@ -185,8 +185,12 @@ const api = {
     return revision;
   },
 
-  /** The document with its revision and the cursor's place in it. */
-  read: () => ({ doc: view.state.doc.toString(), rev: revision, head: view.state.selection.main.head }),
+  /** The document with its revision and the text the user has selected. */
+  read() {
+    const { state } = view;
+    const selected = state.selection.ranges.map((r) => state.sliceDoc(r.from, r.to)).join("\n");
+    return { markdown: state.doc.toString(), rev: revision, selected };
+  },
 
   /** The document in a target's form: the current target's, or the named one's. */
   export(name = ""): Exported {

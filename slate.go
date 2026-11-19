@@ -557,7 +557,12 @@ func (e *Editor) eval(pg *page, out any, fn string, args ...any) error {
 		return err
 	}
 	if res.Exception != nil {
-		return fmt.Errorf("slate: %s: %s %s", fn, res.Exception.Text, res.Exception.Exception.Description)
+		// The description is "Error: the message" and then the stack.
+		msg, _, _ := strings.Cut(res.Exception.Exception.Description, "\n")
+		if msg = strings.TrimPrefix(msg, "Error: "); msg == "" {
+			msg = res.Exception.Text
+		}
+		return fmt.Errorf("%s: %s", strings.TrimPrefix(fn, "slate."), msg)
 	}
 	if out == nil || len(res.Result.Value) == 0 {
 		return nil
@@ -598,6 +603,39 @@ func (e *Editor) Text() (markdown string, rev uint64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.doc, e.docRev
+}
+
+// Snapshot is the document at one moment.
+type Snapshot struct {
+	Markdown string `json:"markdown"`
+	Rev      uint64 `json:"rev"`
+	// Selected is the text the user has selected, empty when none is.
+	Selected string `json:"selected,omitempty"`
+}
+
+// Snapshot returns the document with its revision and the user's selection,
+// read from the page in one step.
+func (e *Editor) Snapshot(ctx context.Context) (Snapshot, error) {
+	return ask(ctx, e, func(pg *page) (Snapshot, error) {
+		var s Snapshot
+		if err := e.eval(pg, &s, "slate.read"); err != nil {
+			return s, err
+		}
+		e.mu.Lock()
+		s.Rev += e.revBase
+		e.mu.Unlock()
+		return s, nil
+	})
+}
+
+// Target returns the name of the target the document is written for.
+func (e *Editor) Target() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.target == "" {
+		return "markdown"
+	}
+	return e.target
 }
 
 // SetMarkdown replaces the document and puts the cursor at its start.

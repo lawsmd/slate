@@ -75,18 +75,21 @@ bin\slate shot -o out.png file.md  # render to a PNG without a terminal
 ## Using slate from a host
 
 ```go
-ed, err := slate.New(slate.Options{Markdown: text, Mentions: searchUsers})
+slate.Warm()                      // at startup: start the browser in the background
+defer slate.Shutdown()
+
+ed, err := slate.New(slate.Options{Markdown: text, Target: "jira", Mentions: searchUsers})
 defer ed.Close()
 
 ed.SetRect(col, row, cols, rows)  // terminal cells, counted from 1
 ed.SetCellSize(w, h)              // pixels, from the terminal's reply to CSI 16 t
-ed.Key(slate.Key{Name: "a"})      // also Mouse, Paste, Copy, Cut, Focus
+ed.Key(slate.Key{Name: "a"})      // also Mouse, Paste, Focus, SetTheme
 
 <-ed.Updates()                    // the picture changed
 os.Stdout.Write(ed.Draw())        // Sixel for the changed rows
 
-md, _ := ed.Markdown()
-adf, _ := ed.ADF()                // the body of a Jira Cloud comment
+md, _ := ed.Markdown(ctx)
+out, _ := ed.Export(ctx, "")      // the document in its target's form
 ```
 
 The host must leave the block's cells alone between draws: text written over a cell
@@ -95,6 +98,26 @@ call `ed.Invalidate()` and draw again.
 
 A Bubble Tea v2 host uses the `bubble` package, which does this bookkeeping. See
 `cmd/slate/host.go`.
+
+### Calls and the browser
+
+Every editor of a process is a page in one browser. The first `New` starts the browser
+(about 0.8 s measured) unless `Warm` did so earlier; a second editor opens in about 0.3 s.
+
+`Key`, `Mouse`, `Paste`, `Focus`, `SetRect`, `SetCellSize`, `SetTheme`, `SetRender`,
+`SetTarget` and `SetMarkdown` return at once. slate sends them to the page in the order
+they were called. `Markdown`, `Export`, `Edit`, `Snapshot`, `Tree`, `Copy`, `Cut` and
+`Screenshot` wait for the page, after every call made before them, and take a context.
+
+`ed.Events()` delivers `slate.Changed{Rev, Origin}` for each change of the document,
+`slate.Failed{Op, Err}` when one of the calls that return nothing could not be carried
+out, and `slate.Restarted` when the browser or the page stopped and slate opened a new
+page with the same document, cursor, theme and place. `ed.Text()` returns the document and
+its revision as the page last reported them, without asking the page.
+
+`ed.Edit(ctx, slate.Edit{Old, New}, "name")` replaces one exact piece of text for a writer
+other than the user. The change is one undo step, the user's cursor keeps its place, and
+the new text is highlighted for four seconds.
 
 ## Herdr
 
@@ -184,6 +207,73 @@ process's console, `-queries` lists what the current terminal answers, `-api` se
 request to Herdr's socket, `-focus` tells Herdr its window lost the focus and got it back,
 and `-cells` prints the characters and attributes the console holds.
 
+## Targets
+
+A target is where the document goes when it is written: a Jira comment, a Markdown file,
+later an Obsidian note. `Options.Target` names it. The target sets the Markdown extensions
+the editor parses with, the defaults of the live view, and the export. The editor and the
+export parse with the same extensions.
+
+| Target | Export |
+| --- | --- |
+| `markdown` (default) | the Markdown text, `text/markdown` |
+| `jira` | Atlassian Document Format, `application/json` |
+
+`ed.Export(ctx, "")` returns the document in the editor's target's form, and
+`ed.Export(ctx, "jira")` in a named one's. `ed.Import(ctx, body)` loads a document from
+the target's form where the target can convert it back; `markdown` can and `jira` cannot
+yet. `ed.ADF(ctx)` is `Export` for `jira`.
+
+A target also lists what it cannot carry as written. The editor underlines each such
+stretch with a wavy line, and `ed.Unsupported(ctx)` returns them with what the export
+makes of each. For `jira` these are images (sent as links) and HTML (sent as text).
+
+### Adding a target
+
+Write one file in `web/src/targets/` that exports a `Target` (see `index.ts` for the
+interface and `markdown.ts` for the smallest one), add it to `targets` in `index.ts`, run
+`npm run build` in `web/`, and rebuild the Go program. `export` receives the text and its
+Lezer syntax tree.
+
+A host can also write an export in Go. `ed.Tree(ctx)` returns the syntax tree as JSON with
+byte offsets into the Markdown:
+
+```json
+{"markdown": "Hi *you*", "root": {"type": "Document", "from": 0, "to": 8, "children": [...]}}
+```
+
+## Link
+
+Package `link` lets another program of the same user read and edit the documents open in
+slate editors, so that a person and a language model can write one together. A `bubble`
+host registers its editor when it starts. `SLATE_LINK=0` in the host's environment turns
+that off.
+
+```
+slate ls                                   # the editors open on this machine
+slate read [ID]                            # an editor's Markdown; -json adds revision and selection
+slate edit -old TEXT -new TEXT [-by NAME] [ID]
+slate watch [ID]                           # one line per change
+```
+
+`ID` may be left out while one editor is open. `edit` replaces text that occurs exactly
+once, and without `-old` adds the new text at the end. The edit shows in the editor at
+once, highlighted, and one undo removes it.
+
+The link can read and replace text and nothing else. It has no request that saves, sends
+or submits a document, so a comment reaches Jira only when the person presses the host's
+own key for that.
+
+A host tells clients what a document is with `block.Describe("comment on PROJ-123",
+map[string]string{"ticket": "PROJ-123"})`. `slate ls` shows the title, the fields, the
+target, the host program and its Herdr pane.
+
+Each host listens on a Unix socket in `%LOCALAPPDATA%\slate\run` (the user's cache
+directory on other systems) and writes a JSON file beside it that lists its editors. Each
+request is one line of JSON on a new connection: `list`, `read`, `edit` or `watch`. Go
+programs use `link.List`, `link.Read`, `link.Edit` and `link.Watch`. There is no MCP
+server yet; an agent with a shell uses the commands above.
+
 ## Rendering styles
 
 `Options.Render` sets a style per construct: `slate.Live` (syntax hides until the cursor
@@ -213,15 +303,19 @@ a new line.
 | Path | Contents |
 | --- | --- |
 | `slate.go`, `draw.go`, `input.go`, `theme.go` | the `Editor` |
+| `pool.go` | the browser that a process's editors share |
 | `wt.go` | colours and font from Windows Terminal's settings |
 | `browser/` | finds and starts Edge, DevTools protocol over a pipe |
 | `sixel/` | colour quantiser and Sixel encoder |
-| `bubble/` | Bubble Tea v2 adapter |
+| `bubble/` | Bubble Tea v2 adapter and its painters |
+| `link/` | reading and editing open editors from another program |
 | `herdr/` | draws from inside a Herdr pane (Windows) |
 | `term/` | raw terminal access, used by the bench |
-| `web/` | the editor page: CodeMirror 6, live preview, ADF export |
+| `web/` | the editor page: CodeMirror 6, live preview |
+| `web/src/targets/` | one file per downstream format |
 | `web/dist/index.html` | the built page, embedded in the Go package |
-| `cmd/slate/`, `cmd/slate-bench/` | demo host and latency test |
+| `cmd/slate/` | demo host, and the `ls`, `read`, `edit` and `watch` commands |
+| `cmd/slate-bench/` | latency test |
 | `cmd/slate-probe/` | experiments for drawing under a multiplexer |
 
 After changing anything under `web/src`, run `npm run build` in `web/` (or `go generate`)

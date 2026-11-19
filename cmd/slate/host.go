@@ -161,6 +161,12 @@ func (h *host) run(markdown string) (json.RawMessage, error) {
 	defer ed.Close()
 	h.ed, h.block = ed, bubble.New(ed)
 	defer h.block.Close()
+	if h.path != "" {
+		abs, _ := filepath.Abs(h.path)
+		h.block.Describe("note "+filepath.Base(h.path), map[string]string{"file": abs})
+	} else {
+		h.block.Describe("new comment", nil)
+	}
 	if pane != nil {
 		h.block.Through(bubble.Herdr(pane))
 		h.follow = true

@@ -20,6 +20,7 @@ import (
 	uv "github.com/charmbracelet/ultraviolet"
 
 	"github.com/lawsmd/slate"
+	"github.com/lawsmd/slate/link"
 )
 
 // requestCellSize asks the terminal for the pixel size of one cell.
@@ -57,15 +58,31 @@ type Model struct {
 	drawBytes  int
 
 	paint      Painter
-	painted    *Rect // where the painter last wrote the image
-	winW, winH int   // the host's window in cells
-	redraws    int   // counts calls to Redraw; only the newest one draws
-	partials   int   // counts draws of changed rows; the newest one settles
+	reg        *link.Registration // nil when the link is off
+	painted    *Rect              // where the painter last wrote the image
+	winW, winH int                // the host's window in cells
+	redraws    int                // counts calls to Redraw; only the newest one draws
+	partials   int                // counts draws of changed rows; the newest one settles
 }
 
 // New wraps an editor. The caller still owns the editor and closes it.
 func New(ed *slate.Editor) *Model {
-	return &Model{ed: ed, paint: stdout{}, done: make(chan struct{})}
+	m := &Model{ed: ed, paint: stdout{}, done: make(chan struct{})}
+	// Other programs of this user can read and edit the document through
+	// package link, unless SLATE_LINK=0 is set. They cannot save or send it.
+	if link.Enabled() {
+		m.reg, _ = link.Register(ed, link.Info{})
+	}
+	return m
+}
+
+// Describe tells programs that reach the editor through package link what
+// the document is, such as "comment on PROJ-123", and whatever else helps
+// them choose it among several.
+func (m *Model) Describe(title string, meta map[string]string) {
+	if m.reg != nil {
+		m.reg.Describe(link.Info{Title: title, Meta: meta})
+	}
 }
 
 // Through makes the model write the image with p. Call it before the
@@ -76,6 +93,9 @@ func (m *Model) Through(p Painter) { m.paint = p }
 // detached painter it also removes the image, which would stay behind.
 func (m *Model) Close() {
 	close(m.done)
+	if m.reg != nil {
+		m.reg.Close()
+	}
 	if m.paint.Detached() && m.painted != nil {
 		time.Sleep(eraseDelay)
 		m.paint.Erase(*m.painted)
