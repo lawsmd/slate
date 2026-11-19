@@ -40,6 +40,9 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--sl-bg)
 
 #root .sl-dim { color: var(--sl-dim); }
 
+/* What the target cannot carry as written. */
+#root .sl-unsupported { text-decoration: underline wavy var(--sl-warning); text-underline-offset: 3px; }
+
 /* Text another program wrote a moment ago. */
 #root .sl-edited { background: color-mix(in srgb, var(--sl-edited, var(--sl-success)) 28%, transparent);
   border-radius: 2px; }

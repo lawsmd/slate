@@ -1,6 +1,6 @@
 import type { CompletionContext, CompletionResult } from "@codemirror/autocomplete";
 import { syntaxTree } from "@codemirror/language";
-import { mentionScheme } from "./adf";
+import { mentionScheme } from "./syntax";
 import { requestHost } from "./host";
 
 export interface MentionUser {

@@ -1,12 +1,13 @@
-// Markdown to Atlassian Document Format.
-//
-// The conversion reads the same Lezer syntax tree the editor draws from, so
-// what is exported is what was shown.
+// The Jira target: Markdown to Atlassian Document Format, the body of a Jira
+// Cloud comment or description.
 
 import { parser as baseParser, GFM } from "@lezer/markdown";
-import type { SyntaxNode } from "@lezer/common";
+import type { SyntaxNode, Tree } from "@lezer/common";
+import { calloutPanels, calloutPattern, mentionScheme } from "../syntax";
+import type { Loss, Source, Target } from "./index";
 
-export const mdParser = baseParser.configure([GFM]);
+const syntax = [GFM];
+const mdParser = baseParser.configure(syntax);
 
 export interface Mark {
   type: string;
@@ -22,21 +23,6 @@ export interface ADFNode {
   marks?: Mark[];
 }
 
-/** Obsidian callout types and the Jira panel each one maps to. */
-export const calloutPanels: Record<string, string> = {
-  info: "info", todo: "info", abstract: "info", summary: "info", tldr: "info",
-  question: "info", help: "info", faq: "info", example: "info",
-  note: "note", quote: "note", cite: "note",
-  tip: "success", hint: "success", important: "success", success: "success", check: "success", done: "success",
-  warning: "warning", caution: "warning", attention: "warning",
-  danger: "error", error: "error", bug: "error", failure: "error", fail: "error", missing: "error",
-};
-
-export const calloutPattern = /^\[!(\w+)\][+-]?[ \t]*(.*)$/;
-
-/** The scheme of a mention link: `[@Name](mention:accountId)`. */
-export const mentionScheme = "mention:";
-
 const entities: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
 
 // Block types Jira accepts inside each container.
@@ -44,18 +30,55 @@ const inListItem = new Set(["paragraph", "bulletList", "orderedList", "codeBlock
 const inQuote = new Set(["paragraph", "bulletList", "orderedList", "codeBlock"]);
 const inPanel = new Set(["paragraph", "heading", "bulletList", "orderedList", "codeBlock", "taskList", "rule"]);
 
-export function toADF(doc: string): ADFNode {
-  return new Converter(doc).document();
+/** Converts Markdown, or a document already parsed with this target's syntax. */
+export function toADF(doc: string, tree: Tree = mdParser.parse(doc)): ADFNode {
+  return new Converter(doc, tree).document();
 }
+
+/** Constructs Jira has no form for, and what the export makes of each. */
+const losses: Record<string, string> = {
+  Image: "Jira takes no image from Markdown. It is sent as a link.",
+  HTMLBlock: "Jira takes no HTML. It is sent as plain text.",
+  HTMLTag: "Jira takes no HTML. It is sent as plain text.",
+  Comment: "Jira takes no HTML comment. It is sent as plain text.",
+  CommentBlock: "Jira takes no HTML comment. It is sent as plain text.",
+  LinkReference: "Jira takes no link definition. It is sent as plain text.",
+};
+
+function unsupported(source: Source): Loss[] {
+  const out: Loss[] = [];
+  source.tree.iterate({
+    enter(n) {
+      const reason = losses[n.name];
+      if (!reason) return;
+      out.push({ from: n.from, to: n.to, reason });
+      return false;
+    },
+  });
+  return out;
+}
+
+export const jira: Target = {
+  name: "jira",
+  syntax,
+  render: { code: "block", table: "block" },
+  unsupported,
+  export: (source) => ({
+    mime: "application/json",
+    body: JSON.stringify(toADF(source.text, source.tree)),
+  }),
+};
 
 class Converter {
   private ids = 0;
 
-  constructor(private readonly doc: string) {}
+  constructor(
+    private readonly doc: string,
+    private readonly tree: Tree,
+  ) {}
 
   document(): ADFNode {
-    const tree = mdParser.parse(this.doc);
-    return { version: 1, type: "doc", content: this.blocks(tree.topNode) };
+    return { version: 1, type: "doc", content: this.blocks(this.tree.topNode) };
   }
 
   private slice(from: number, to: number): string {

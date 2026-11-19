@@ -75,8 +75,13 @@ type Mention struct {
 type Options struct {
 	// Markdown is the initial document.
 	Markdown string
-	Theme    Theme
-	Render   Render
+	// Target names where the document goes when it is done: "markdown",
+	// the default, or "jira". The target sets the syntax the editor
+	// accepts and draws, marks what it cannot carry, and makes the Export.
+	// See web/src/targets.
+	Target string
+	Theme  Theme
+	Render Render
 	// Mentions searches users for the text typed after "@". Nil turns
 	// mention completion off.
 	Mentions func(ctx context.Context, query string) ([]Mention, error)
@@ -160,6 +165,7 @@ type Editor struct {
 	// What a new page needs to look like the old one.
 	theme  map[string]string
 	render Render
+	target string
 	focus  bool
 	doc    string // the document as the page last sent it
 	head   int    // the cursor's offset in doc
@@ -185,7 +191,7 @@ func New(opts Options) (*Editor, error) {
 		col:     max(opts.Col, 1), row: max(opts.Row, 1),
 		cols: opts.Cols, rows: opts.Rows,
 		cellW: opts.CellWidth, cellH: opts.CellHeight,
-		theme: opts.Theme.vars(), render: opts.Render, focus: true,
+		theme: opts.Theme.vars(), render: opts.Render, target: opts.Target, focus: true,
 		doc: opts.Markdown,
 	}
 	if e.cols <= 0 {
@@ -280,6 +286,9 @@ func (e *Editor) load(pg *page) error {
 
 	e.mu.Lock()
 	settings := map[string]any{"theme": maps.Clone(e.theme), "render": e.render}
+	if e.target != "" {
+		settings["target"] = e.target
+	}
 	doc, head, focus := e.doc, e.head, e.focus
 	e.loading, e.revBase = true, e.rev
 	e.mu.Unlock()
@@ -621,10 +630,66 @@ func (e *Editor) Edit(ctx context.Context, edit Edit, origin string) (uint64, er
 	})
 }
 
+// Payload is the document in the form its destination takes.
+type Payload struct {
+	Mime string `json:"mime"` // the media type of Body
+	Body string `json:"body"`
+}
+
+// Export returns the document in the form of a target: the editor's own
+// when target is empty, or the named one.
+func (e *Editor) Export(ctx context.Context, target string) (Payload, error) {
+	return get[Payload](ctx, e, "slate.export", target)
+}
+
+// Import replaces the document with one in the form of the editor's target,
+// such as a comment fetched for editing. It fails for a target that has no
+// way back to Markdown.
+func (e *Editor) Import(ctx context.Context, body string) error {
+	_, err := get[json.RawMessage](ctx, e, "slate.import", body)
+	return err
+}
+
+// SetTarget changes where the document goes. The syntax the editor accepts
+// and draws follows.
+func (e *Editor) SetTarget(target string) {
+	e.mu.Lock()
+	e.target = target
+	e.mu.Unlock()
+	e.post("SetTarget", func(pg *page) error {
+		return e.eval(pg, nil, "slate.configure", map[string]any{"target": target})
+	})
+}
+
+// Tree returns the document's syntax tree as JSON, for a host that writes
+// its own export:
+//
+//	{"markdown": "...", "root": {"type": "Document", "from": 0, "to": 12, "children": [...]}}
+//
+// A node's type is its name in the Markdown grammar, such as "Paragraph" or
+// "Emphasis". from and to are byte offsets into markdown.
+func (e *Editor) Tree(ctx context.Context) (json.RawMessage, error) {
+	return get[json.RawMessage](ctx, e, "slate.tree")
+}
+
+// Loss is a stretch of the document that the target cannot carry as
+// written. The editor underlines it.
+type Loss struct {
+	From   int    `json:"from"` // offsets in UTF-16 units, as the page counts
+	To     int    `json:"to"`
+	Reason string `json:"reason"` // what the export makes of it
+}
+
+// Unsupported returns what the editor's target changes or drops on export.
+func (e *Editor) Unsupported(ctx context.Context) ([]Loss, error) {
+	return get[[]Loss](ctx, e, "slate.unsupported")
+}
+
 // ADF returns the document as Atlassian Document Format JSON, the body of a
-// Jira Cloud comment.
+// Jira Cloud comment. It is Export for the "jira" target.
 func (e *Editor) ADF(ctx context.Context) (json.RawMessage, error) {
-	return get[json.RawMessage](ctx, e, "slate.getADF")
+	p, err := e.Export(ctx, "jira")
+	return json.RawMessage(p.Body), err
 }
 
 // Modified reports whether the document changed since New or MarkSaved.

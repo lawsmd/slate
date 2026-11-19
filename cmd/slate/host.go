@@ -150,7 +150,11 @@ func (h *host) run(markdown string) (json.RawMessage, error) {
 	if pane == nil {
 		theme.Background, theme.Foreground, theme.Selection = "", "", ""
 	}
-	ed, err := slate.New(slate.Options{Markdown: markdown, Mentions: demoMentions, Theme: theme})
+	target := "markdown"
+	if h.path == "" {
+		target = "jira" // a comment is written for Jira
+	}
+	ed, err := slate.New(slate.Options{Markdown: markdown, Target: target, Mentions: demoMentions, Theme: theme})
 	if err != nil {
 		return nil, err
 	}

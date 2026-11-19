@@ -3,11 +3,11 @@ import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirro
 import { commonmarkLanguage, markdown } from "@codemirror/lang-markdown";
 import { HighlightStyle, syntaxHighlighting, syntaxTree } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
-import { EditorSelection, EditorState } from "@codemirror/state";
-import { drawSelection, EditorView, keymap, type Command } from "@codemirror/view";
+import { Compartment, EditorSelection, EditorState, StateField } from "@codemirror/state";
+import { Decoration, type DecorationSet, drawSelection, EditorView, keymap, type Command } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
-import { GFM } from "@lezer/markdown";
-import { toADF } from "./adf";
+import { toDoc } from "./doc";
+import { defaultTarget, parse, target, type Exported, type Target } from "./targets";
 import { defaultRender, renderCompartment, renderConfig, trackFocus, type RenderConfig } from "./config";
 import { applyEdit, editMarks, origin, type Edit } from "./edits";
 import { notifyHost, resolveHost } from "./host";
@@ -87,6 +87,31 @@ const closeFence = EditorView.inputHandler.of((view, from, to, text) => {
   return true;
 });
 
+/** The target the document is written for. */
+let current: Target = target(defaultTarget);
+
+const language = (tg: Target) =>
+  markdown({ base: commonmarkLanguage, extensions: tg.syntax, codeLanguages: languages, completeHTMLTags: false });
+const languageCompartment = new Compartment();
+
+/** Underlines what the current target cannot carry as written. */
+const lossMarks = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(marks, tr) {
+    if (!tr.docChanged && !tr.reconfigured) return marks;
+    const found = current.unsupported?.(parse(current, tr.newDoc.toString())) ?? [];
+    return Decoration.set(
+      found
+        .filter((loss) => loss.to > loss.from)
+        .map((loss) =>
+          Decoration.mark({ class: "sl-unsupported", attributes: { title: loss.reason } }).range(loss.from, loss.to),
+        ),
+      true,
+    );
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
 /** Counts document changes. The host keeps the text it was last sent with its number. */
 let revision = 0;
 
@@ -103,7 +128,8 @@ const view = new EditorView({
       EditorView.lineWrapping,
       EditorState.tabSize.of(4),
       keymap.of([...slateKeymap, ...completionKeymap]),
-      markdown({ base: commonmarkLanguage, extensions: [GFM], codeLanguages: languages, completeHTMLTags: false }),
+      languageCompartment.of(language(current)),
+      lossMarks,
       syntaxHighlighting(highlight),
       renderCompartment.of(renderConfig.of(defaultRender)),
       trackFocus,
@@ -133,7 +159,12 @@ interface Settings {
   render?: Partial<RenderConfig>;
   /** CSS custom properties without the `--sl-` prefix, for example `{ bg: "#000" }`. */
   theme?: Record<string, string>;
+  /** The name of the target to write for. */
+  target?: string;
 }
+
+/** The host's own render choices, kept so a change of target can rebuild on them. */
+let hostRender: Partial<RenderConfig> = {};
 
 const api = {
   getMarkdown: (): string => view.state.doc.toString(),
@@ -157,7 +188,23 @@ const api = {
   /** The document with its revision and the cursor's place in it. */
   read: () => ({ doc: view.state.doc.toString(), rev: revision, head: view.state.selection.main.head }),
 
-  getADF: () => toADF(view.state.doc.toString()),
+  /** The document in a target's form: the current target's, or the named one's. */
+  export(name = ""): Exported {
+    const tg = name ? target(name) : current;
+    return tg.export(parse(tg, view.state.doc.toString()));
+  },
+
+  /** Replaces the document with one in the current target's form. */
+  import(body: string): void {
+    if (!current.import) throw new Error(`the ${current.name} target cannot import`);
+    api.setMarkdown(current.import(body));
+  },
+
+  /** The syntax tree as plain data, parsed with the current target's syntax. */
+  tree: () => toDoc(parse(current, view.state.doc.toString())),
+
+  /** What the current target cannot carry as written. */
+  unsupported: () => current.unsupported?.(parse(current, view.state.doc.toString())) ?? [],
 
   /** The selected text. With cut set, it is also removed. */
   selection(cut = false): string {
@@ -177,10 +224,18 @@ const api = {
   },
 
   configure(settings: Settings): void {
-    if (settings.render) {
-      const render = { ...defaultRender, ...settings.render };
-      view.dispatch({ effects: renderCompartment.reconfigure(renderConfig.of(render)) });
+    const effects = [];
+    if (settings.target && settings.target !== current.name) {
+      current = target(settings.target);
+      effects.push(languageCompartment.reconfigure(language(current)));
     }
+    if (settings.render) hostRender = settings.render;
+    if (settings.render || effects.length) {
+      // The host's choices win over the target's, which win over the defaults.
+      const render = { ...defaultRender, ...current.render, ...hostRender };
+      effects.push(renderCompartment.reconfigure(renderConfig.of(render)));
+    }
+    if (effects.length) view.dispatch({ effects });
     for (const [name, value] of Object.entries(settings.theme ?? {})) {
       document.documentElement.style.setProperty("--sl-" + name, value);
     }

@@ -331,3 +331,61 @@ func TestEditorsShareABrowserAndRestart(t *testing.T) {
 		t.Fatal("no frame arrived after the restart")
 	}
 }
+
+func TestTargets(t *testing.T) {
+	browserTest(t)
+	ed, err := New(Options{Markdown: "Hello **there**.\n\n![chart](chart.png)\n", Target: "jira", Cols: 40, Rows: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ed.Close()
+	ctx := context.Background()
+
+	p, err := ed.Export(ctx, "")
+	if err != nil || p.Mime != "application/json" || !strings.Contains(p.Body, `"type":"strong"`) {
+		t.Fatalf("export for the editor's target: %+v, %v", p, err)
+	}
+	md, err := ed.Export(ctx, "markdown")
+	if err != nil || md.Mime != "text/markdown" || md.Body != "Hello **there**.\n\n![chart](chart.png)\n" {
+		t.Fatalf("export as markdown: %+v, %v", md, err)
+	}
+	if _, err := ed.Export(ctx, "nowhere"); err == nil {
+		t.Fatal("an export for an unknown target should fail")
+	}
+
+	losses, err := ed.Unsupported(ctx)
+	if err != nil || len(losses) != 1 || !strings.Contains(losses[0].Reason, "link") {
+		t.Fatalf("what jira cannot carry: %+v, %v", losses, err)
+	}
+	if err := ed.Import(ctx, "{}"); err == nil {
+		t.Fatal("the jira target has no import and should say so")
+	}
+
+	ed.SetTarget("markdown")
+	if losses, err := ed.Unsupported(ctx); err != nil || len(losses) != 0 {
+		t.Fatalf("markdown carries everything: %+v, %v", losses, err)
+	}
+	if err := ed.Import(ctx, "new *text*"); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := ed.Tree(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tree struct {
+		Markdown string
+		Root     struct {
+			Type     string
+			From, To int
+			Children []struct{ Type string }
+		}
+	}
+	if err := json.Unmarshal(raw, &tree); err != nil {
+		t.Fatal(err)
+	}
+	if tree.Markdown != "new *text*" || tree.Root.Type != "Document" || tree.Root.To != len(tree.Markdown) ||
+		len(tree.Root.Children) != 1 || tree.Root.Children[0].Type != "Paragraph" {
+		t.Fatalf("tree: %s", raw)
+	}
+}

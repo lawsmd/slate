@@ -4,7 +4,7 @@ import { ensureSyntaxTree, syntaxTree } from "@codemirror/language";
 import { EditorState, Range, StateField } from "@codemirror/state";
 import { Decoration, DecorationSet, EditorView } from "@codemirror/view";
 import type { SyntaxNode } from "@lezer/common";
-import { calloutPanels, calloutPattern, mentionScheme } from "./adf";
+import { calloutPanels, calloutPattern, mentionScheme } from "./syntax";
 import { focusField, renderCompartment, renderConfig } from "./config";
 import {
   BulletWidget,

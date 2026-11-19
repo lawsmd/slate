@@ -1,5 +1,5 @@
 import { EditorView, WidgetType } from "@codemirror/view";
-import { toADF, type ADFNode } from "./adf";
+import { toADF, type ADFNode } from "./targets/jira";
 import { openLanguagePicker } from "./langpicker";
 
 export class BulletWidget extends WidgetType {

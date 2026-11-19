@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import Ajv from "ajv-draft-04";
 import schema from "./adf-schema.json";
-import { toADF, type ADFNode } from "../src/adf";
+import { toADF, type ADFNode } from "../src/targets/jira";
 
 const validate = new Ajv({ strict: false, allErrors: true }).compile(schema);
 
