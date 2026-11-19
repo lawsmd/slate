@@ -155,24 +155,12 @@ const (
 	lookEvery   = 4 * time.Millisecond
 	reportEvery = 500 * time.Millisecond
 
-	// Herdr repaints the pane when its window comes to the front. For hotFor
-	// after that the helper looks every hotEvery, so that the image is back
-	// before the terminal paints the empty cells.
+	// With redraw_on_focus_gained on, which is its default, Herdr repaints
+	// the pane 50 to 60 ms after its window comes to the front. For hotFor
+	// after that the helper looks every hotEvery, to put the image back as
+	// soon as Herdr has finished.
 	hotEvery = time.Millisecond
 	hotFor   = 150 * time.Millisecond
-	// holdFor is the longest the terminal's painting is held with syncEnv set.
-	holdFor = 50 * time.Millisecond
-)
-
-// syncEnv turns on an experiment. When the window comes to the front the
-// helper starts a synchronized update (DECSET 2026), which asks the terminal
-// to stop painting, and ends it once the image is back. A terminal that
-// honours it paints Herdr's repaint and the image as one frame.
-const syncEnv = "SLATE_HERDR_SYNC"
-
-const (
-	beginSync = "\x1b[?2026h"
-	endSync   = "\x1b[?2026l"
 )
 
 // logEnv names a file in which the helper notes what it sees in the marked
@@ -193,7 +181,6 @@ type console struct {
 	state      string     // the last line written to the log
 	log        *os.File
 	looked     time.Time // when the cells were last looked at; used by watch alone
-	held       time.Time // when a synchronized update was started; zero when none is open
 }
 
 // helper attaches to the console of process pid and carries out the
@@ -212,7 +199,7 @@ func helper(pid int) error {
 	if path := os.Getenv(logEnv); path != "" {
 		c.log, _ = os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	}
-	go c.watch(os.Getenv(syncEnv) != "")
+	go c.watch()
 	var head [5]byte
 	for {
 		if _, err := io.ReadFull(os.Stdin, head[:]); err != nil {
@@ -267,8 +254,11 @@ func terminalWindow() uintptr {
 // watch looks at the marked cells until the process ends and tells the host
 // of each wipe. It looks more often just after the terminal's window comes
 // to the front.
-func (c *console) watch(sync bool) {
+func (c *console) watch() {
 	window := terminalWindow()
+	c.mu.Lock()
+	c.note("terminal window %#x", window)
+	c.mu.Unlock()
 	var front bool
 	var hotUntil time.Time
 	for {
@@ -279,10 +269,6 @@ func (c *console) watch(sync bool) {
 				hotUntil = now.Add(hotFor)
 				c.mu.Lock()
 				c.note("window to the front")
-				if sync && c.w > 0 && c.held.IsZero() {
-					c.write([]byte(beginSync))
-					c.held = now
-				}
 				c.mu.Unlock()
 			}
 			front = fg == window
@@ -294,22 +280,9 @@ func (c *console) watch(sync bool) {
 				os.Stdout.Write([]byte{'w'})
 			}
 		}
-		c.mu.Lock()
-		if !c.held.IsZero() && now.Sub(c.held) >= holdFor {
-			c.release()
-		}
-		c.mu.Unlock()
-		// The window is checked every millisecond: Herdr repaints within a
-		// few of a change, and the check costs next to nothing.
+		// The window is checked every millisecond, which costs next to
+		// nothing. The cells are read that often only while hot.
 		time.Sleep(hotEvery)
-	}
-}
-
-// release ends the synchronized update, if one is open.
-func (c *console) release() {
-	if !c.held.IsZero() {
-		c.write([]byte(endSync))
-		c.held = time.Time{}
 	}
 }
 
@@ -399,12 +372,14 @@ func (c *console) wiped() bool {
 	// the middle of its output could break one of its escape sequences.
 	settled := unmarked == c.unmarked
 	c.unmarked = unmarked
+	if !settled {
+		c.note("wiping: %d of %d cells", unmarked, len(c.cells))
+	}
 	if !settled || (c.told && time.Since(c.reported) < reportEvery) {
 		return false
 	}
 	c.note("wiped: %d of %d cells", unmarked, len(c.cells))
 	c.repaint()
-	c.release()
 	c.told, c.reported = true, time.Now()
 	return true
 }

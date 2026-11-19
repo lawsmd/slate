@@ -87,6 +87,8 @@ func main() {
 		}{
 			{"cell size (16t)", "\x1b[16t", 't'}, {"text area pixels (14t)", "\x1b[14t", 't'},
 			{"text area cells (18t)", "\x1b[18t", 't'}, {"device attributes", "\x1b[c", 'c'},
+			// The answer ends ";1$y" or ";2$y" when the terminal knows the mode.
+			{"synchronized output (DECRQM 2026)", "\x1b[?2026$p", 'y'},
 		} {
 			reply, ok := t.Query(q.request, q.final, time.Second)
 			fmt.Fprintf(report, "%s: %q answered=%v\n", q.name, reply, ok)

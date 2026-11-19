@@ -110,23 +110,47 @@ therefore drawn around Herdr:
 3. Herdr rewrites only cells whose text changes, so pieces of the image stay in cells that
    are blank before and after a tab switch, a split or the editor's exit. slate reads the
    console's cells and writes a space over each blank one in the old rectangle.
-4. Herdr repaints every cell when its window gets the keyboard focus back, and that
-   removes the image. Before a whole image, slate writes a space with a blue foreground
-   to each cell of the block. The image hides those cells, and the console keeps their
-   colour until Herdr writes over them. The helper reads the cells every 4 ms. When some
-   have lost the colour and all of those are blank, the helper writes the last whole
-   image again and slate follows with the current one. While any cell holds text, a
-   popup covers the block, and slate waits for it to go.
-5. When the pane reports that it has the keyboard focus again, slate also writes the
+4. With its default settings Herdr repaints every cell 50 to 60 ms after its window gets
+   the keyboard focus back, and that removes the image. Before a whole image, slate writes
+   a space with a blue foreground to each cell of the block. The image hides those cells,
+   and the console keeps their colour until Herdr writes over them. The helper reads the
+   cells every 4 ms, and every millisecond for 150 ms after the terminal's window comes to
+   the front. When some have lost the colour and all of those are blank, the helper writes
+   the last whole image again and slate follows with the current one. While any cell holds
+   text, a popup covers the block, and slate waits for it to go.
+5. slate sends the helper the whole image 250 ms after the last changed rows, so the image
+   the helper writes after a wipe is the current one.
+6. When the pane reports that it has the keyboard focus again, slate also writes the
    whole image 200 ms and one second later, for a loss the helper cannot see.
 
 ```go
 if herdr.Inside() {
     pane, err := herdr.Open()
     defer pane.Close()
-    block.Through(pane) // block is a *bubble.Model
+    block.Through(bubble.Herdr(pane)) // block is a *bubble.Model
 }
 ```
+
+`bubble.Model` writes the image through a `bubble.Painter`. The default painter writes
+through Bubble Tea. `bubble.Herdr` is the painter for a Herdr pane, and another
+multiplexer needs only another painter.
+
+### Focus blink
+
+Herdr's repaint on focus shows the block empty for one screen refresh on some returns to
+the window: Herdr ends its frame, the terminal may paint, and the image follows about 6 ms
+later. Herdr has a setting that turns the repaint off. In Herdr's `config.toml`:
+
+```toml
+[ui]
+redraw_on_focus_gained = false
+```
+
+Apply it with `herdr server reload-config`. With the setting off, the image stays in
+place when the window returns to the front and the block does not blink (measured on
+Herdr 0.8.2: four returns to the front, no wipe). Herdr uses the repaint to clear display
+corruption left while the window was in the background, so with the setting off such
+corruption stays until Herdr's next full redraw.
 
 The helper is the host's own executable, started again with `SLATE_HERDR_HELPER` set. The
 `herdr` package's `init` handles that, so the host needs no code for it.
@@ -139,8 +163,13 @@ Limits found so far:
 
 - A Herdr pane does not answer `CSI 16 t`, so slate assumes a cell of 10 by 20 pixels,
   which is what Windows Terminal reports at every font size.
-- The block is empty for 4 to 8 ms after Herdr repaints, until the helper has seen the
-  same cells twice. Acting on the first look could put a write inside Herdr's output.
+- With `redraw_on_focus_gained` on, the block is empty for about 6 ms after Herdr
+  repaints on focus: 1 to 2 ms until the helper has seen the same cells twice, and about
+  5 ms to write the image. Acting on the first look could put a write inside Herdr's
+  output. Herdr wraps each frame in a synchronized update (`CSI ?2026`), which it ends
+  itself, so slate cannot hold the terminal's painting across the gap.
+- Herdr reports the cell size (`pane.graphics.info`) only with
+  `experimental.kitty_graphics` turned on. slate uses the answer when it gets one.
 - If Herdr repaints while a popup covers part of the block, the rest of the block stays
   empty until the popup closes.
 - slate and Herdr write to the same console without coordination. A write from slate that
