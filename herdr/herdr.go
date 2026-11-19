@@ -119,6 +119,39 @@ func (p *Pane) Draw(x, y, w, h int, seq []byte) error {
 	return p.send('F', append(rectBytes(x, y, w, h), seq...))
 }
 
+// Refresh writes a whole image over the one that Draw placed and keeps the
+// marks as they are. The helper remembers this image and writes it again
+// after a wipe, so call it when the block has changed since the last Draw.
+func (p *Pane) Refresh(seq []byte) error { return p.send('K', seq) }
+
+// CellSize returns the pixel size of one cell of the outer terminal, as
+// Herdr knows it. Herdr reports it only with experimental.kitty_graphics
+// turned on in its configuration.
+func (p *Pane) CellSize() (w, h int, ok bool) {
+	conn, err := dial(p.socket)
+	if err != nil {
+		return 0, 0, false
+	}
+	defer conn.Close()
+	req, _ := json.Marshal(map[string]any{
+		"id": "slate", "method": "pane.graphics.info", "params": map[string]string{"pane_id": p.id},
+	})
+	if _, err := conn.Write(append(req, '\n')); err != nil {
+		return 0, 0, false
+	}
+	var reply struct {
+		Result struct {
+			W int `json:"cell_width_px"`
+			H int `json:"cell_height_px"`
+		}
+	}
+	line, _ := bufio.NewReader(conn).ReadBytes('\n')
+	if json.Unmarshal(line, &reply) != nil {
+		return 0, 0, false
+	}
+	return reply.Result.W, reply.Result.H, reply.Result.W > 0 && reply.Result.H > 0
+}
+
 // Wiped signals that Herdr repainted the cells given to Draw and the image
 // is gone from them. The host answers with another Draw.
 func (p *Pane) Wiped() <-chan struct{} { return p.wiped }

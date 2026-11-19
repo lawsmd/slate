@@ -136,9 +136,13 @@ func commandLine(pid uint32) ([]string, error) {
 }
 
 var (
-	kernel32          = windows.NewLazySystemDLL("kernel32.dll")
-	attachConsole     = kernel32.NewProc("AttachConsole")
-	readConsoleOutput = kernel32.NewProc("ReadConsoleOutputW")
+	kernel32            = windows.NewLazySystemDLL("kernel32.dll")
+	attachConsole       = kernel32.NewProc("AttachConsole")
+	readConsoleOutput   = kernel32.NewProc("ReadConsoleOutputW")
+	getConsoleWindow    = kernel32.NewProc("GetConsoleWindow")
+	user32              = windows.NewLazySystemDLL("user32.dll")
+	getAncestor         = user32.NewProc("GetAncestor")
+	getForegroundWindow = user32.NewProc("GetForegroundWindow")
 )
 
 // A cell of the console as ReadConsoleOutput returns it.
@@ -150,6 +154,25 @@ const (
 
 	lookEvery   = 4 * time.Millisecond
 	reportEvery = 500 * time.Millisecond
+
+	// Herdr repaints the pane when its window comes to the front. For hotFor
+	// after that the helper looks every hotEvery, so that the image is back
+	// before the terminal paints the empty cells.
+	hotEvery = time.Millisecond
+	hotFor   = 150 * time.Millisecond
+	// holdFor is the longest the terminal's painting is held with syncEnv set.
+	holdFor = 50 * time.Millisecond
+)
+
+// syncEnv turns on an experiment. When the window comes to the front the
+// helper starts a synchronized update (DECSET 2026), which asks the terminal
+// to stop painting, and ends it once the image is back. A terminal that
+// honours it paints Herdr's repaint and the image as one frame.
+const syncEnv = "SLATE_HERDR_SYNC"
+
+const (
+	beginSync = "\x1b[?2026h"
+	endSync   = "\x1b[?2026l"
 )
 
 // logEnv names a file in which the helper notes what it sees in the marked
@@ -169,6 +192,8 @@ type console struct {
 	reported   time.Time  // when the host was last told of a wipe
 	state      string     // the last line written to the log
 	log        *os.File
+	looked     time.Time // when the cells were last looked at; used by watch alone
+	held       time.Time // when a synchronized update was started; zero when none is open
 }
 
 // helper attaches to the console of process pid and carries out the
@@ -187,13 +212,7 @@ func helper(pid int) error {
 	if path := os.Getenv(logEnv); path != "" {
 		c.log, _ = os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	}
-	go func() {
-		for range time.Tick(lookEvery) {
-			if c.wiped() {
-				os.Stdout.Write([]byte{'w'})
-			}
-		}
-	}()
+	go c.watch(os.Getenv(syncEnv) != "")
 	var head [5]byte
 	for {
 		if _, err := io.ReadFull(os.Stdin, head[:]); err != nil {
@@ -208,6 +227,12 @@ func helper(pid int) error {
 		switch {
 		case head[0] == 'W':
 			c.write(payload)
+		case head[0] == 'K':
+			// The whole image over itself: the cells keep their marks.
+			if c.w > 0 {
+				c.image = payload
+			}
+			c.write(payload)
 		case head[0] == 'F' && len(payload) >= 16:
 			c.x, c.y, c.w, c.h = v(0), v(1), v(2), v(3)
 			c.unmarked = -1
@@ -220,6 +245,71 @@ func helper(pid int) error {
 			c.write(c.eraseBlank(v(0), v(1), v(2), v(3)))
 		}
 		c.mu.Unlock()
+	}
+}
+
+// terminalWindow returns the window that shows the attached console, or 0.
+// A console behind a pseudoconsole has a hidden window of its own, which the
+// terminal owns.
+func terminalWindow() uintptr {
+	hwnd, _, _ := getConsoleWindow.Call()
+	if hwnd == 0 {
+		return 0
+	}
+	const rootOwner = 3 // GA_ROOTOWNER
+	root, _, _ := getAncestor.Call(hwnd, rootOwner)
+	if root == hwnd {
+		return 0
+	}
+	return root
+}
+
+// watch looks at the marked cells until the process ends and tells the host
+// of each wipe. It looks more often just after the terminal's window comes
+// to the front.
+func (c *console) watch(sync bool) {
+	window := terminalWindow()
+	var front bool
+	var hotUntil time.Time
+	for {
+		now := time.Now()
+		if window != 0 {
+			fg, _, _ := getForegroundWindow.Call()
+			if fg == window && !front {
+				hotUntil = now.Add(hotFor)
+				c.mu.Lock()
+				c.note("window to the front")
+				if sync && c.w > 0 && c.held.IsZero() {
+					c.write([]byte(beginSync))
+					c.held = now
+				}
+				c.mu.Unlock()
+			}
+			front = fg == window
+		}
+		hot := now.Before(hotUntil)
+		if hot || now.Sub(c.looked) >= lookEvery {
+			c.looked = now
+			if c.wiped() {
+				os.Stdout.Write([]byte{'w'})
+			}
+		}
+		c.mu.Lock()
+		if !c.held.IsZero() && now.Sub(c.held) >= holdFor {
+			c.release()
+		}
+		c.mu.Unlock()
+		// The window is checked every millisecond: Herdr repaints within a
+		// few of a change, and the check costs next to nothing.
+		time.Sleep(hotEvery)
+	}
+}
+
+// release ends the synchronized update, if one is open.
+func (c *console) release() {
+	if !c.held.IsZero() {
+		c.write([]byte(endSync))
+		c.held = time.Time{}
 	}
 }
 
@@ -314,6 +404,7 @@ func (c *console) wiped() bool {
 	}
 	c.note("wiped: %d of %d cells", unmarked, len(c.cells))
 	c.repaint()
+	c.release()
 	c.told, c.reported = true, time.Now()
 	return true
 }

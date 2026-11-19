@@ -6,8 +6,9 @@
 // editor's picture changes. Bubble Tea rewrites only cells that change, so
 // the blank cells, and the image over them, stay put between frames.
 //
-// In a Herdr pane the image cannot go through the pane. Through sends it to
-// the terminal Herdr runs in, at the pane's place there.
+// Where the host's output does not reach the terminal unchanged, as in a
+// Herdr pane, Through gives the model a Painter that writes the image
+// another way.
 package bubble
 
 import (
@@ -19,7 +20,6 @@ import (
 	uv "github.com/charmbracelet/ultraviolet"
 
 	"github.com/lawsmd/slate"
-	"github.com/lawsmd/slate/herdr"
 )
 
 // requestCellSize asks the terminal for the pixel size of one cell.
@@ -29,9 +29,13 @@ const requestCellSize = "\x1b[16t"
 // before the image is written over them.
 const redrawDelay = 50 * time.Millisecond
 
-// eraseDelay lets Herdr finish repainting after a change of view before the
-// remains of the image are looked for.
+// eraseDelay lets a detached painter's terminal finish repainting after a
+// change of view before the remains of the image are looked for.
 const eraseDelay = 150 * time.Millisecond
+
+// settleDelay is how long after the last changed rows a detached painter
+// gets the whole image, which it keeps to write again after a wipe.
+const settleDelay = 250 * time.Millisecond
 
 type (
 	updateMsg struct{}
@@ -39,11 +43,9 @@ type (
 	wipedMsg  struct{}
 	againMsg  struct{}
 	outerMsg  struct{}
-	eraseMsg  cells
+	eraseMsg  Rect
+	settleMsg int
 )
-
-// cells is a rectangle of the outer terminal, counted from 0.
-type cells struct{ x, y, w, h int }
 
 // Model is the editor block. Create it with New and use it by pointer.
 type Model struct {
@@ -55,15 +57,16 @@ type Model struct {
 	draws      int
 	drawBytes  int
 
-	outer      *herdr.Pane // set when the image goes around Herdr
-	painted    *cells      // where the image was last written in the outer terminal
-	winW, winH int         // the host's window in cells: in Herdr, the inside of the pane
-	redraws    int         // counts calls to Redraw; only the newest one draws
+	paint      Painter
+	painted    *Rect // where the painter last wrote the image
+	winW, winH int   // the host's window in cells
+	redraws    int   // counts calls to Redraw; only the newest one draws
+	partials   int   // counts draws of changed rows; the newest one settles
 }
 
 // New wraps an editor. The caller still owns the editor and closes it.
 func New(ed *slate.Editor) *Model {
-	m := &Model{ed: ed, queue: make(chan func(), 1024), done: make(chan struct{})}
+	m := &Model{ed: ed, paint: stdout{}, queue: make(chan func(), 1024), done: make(chan struct{})}
 	// Input is sent from one goroutine so that keys reach the editor in the
 	// order they were typed without holding up Bubble Tea's update loop.
 	go func() {
@@ -79,34 +82,47 @@ func New(ed *slate.Editor) *Model {
 	return m
 }
 
-// Through makes the model write the image to the terminal that Herdr runs
-// in. Call it before the program starts. The caller closes the pane, after
-// closing the model.
-func (m *Model) Through(p *herdr.Pane) { m.outer = p }
+// Through makes the model write the image with p. Call it before the
+// program starts.
+func (m *Model) Through(p Painter) { m.paint = p }
 
-// Close stops the model's goroutine. It does not close the editor. In a
-// Herdr pane it also removes the image, which Herdr would leave behind.
+// Close stops the model's goroutine. It does not close the editor. With a
+// detached painter it also removes the image, which would stay behind.
 func (m *Model) Close() {
 	close(m.done)
-	if m.outer != nil && m.painted != nil {
+	if m.paint.Detached() && m.painted != nil {
 		time.Sleep(eraseDelay)
-		m.outer.EraseBlank(m.painted.x, m.painted.y, m.painted.w, m.painted.h)
+		m.paint.Erase(*m.painted)
 	}
 }
 
 // Init starts listening for frames and asks the terminal for its cell size.
 func (m *Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{tea.Raw(requestCellSize), m.wait(), m.Redraw()}
-	if m.outer != nil {
-		cmds = append(cmds, m.waitOuter(), m.waitWiped())
+	cmds := []tea.Cmd{tea.Raw(requestCellSize), m.cellSize(), m.wait(), m.Redraw()}
+	if m.paint.Changes() != nil {
+		cmds = append(cmds, m.waitOuter())
+	}
+	if m.paint.Wiped() != nil {
+		cmds = append(cmds, m.waitWiped())
 	}
 	return tea.Batch(cmds...)
+}
+
+// cellSize asks the painter for the cell size. The answer arrives as the
+// event a terminal's own answer makes.
+func (m *Model) cellSize() tea.Cmd {
+	return func() tea.Msg {
+		if w, h, ok := m.paint.CellSize(); ok {
+			return uv.CellSizeEvent{Width: w, Height: h}
+		}
+		return nil
+	}
 }
 
 func (m *Model) waitOuter() tea.Cmd {
 	return func() tea.Msg {
 		select {
-		case <-m.outer.Changes():
+		case <-m.paint.Changes():
 			return outerMsg{}
 		case <-m.done:
 			return nil
@@ -117,7 +133,7 @@ func (m *Model) waitOuter() tea.Cmd {
 func (m *Model) waitWiped() tea.Cmd {
 	return func() tea.Msg {
 		select {
-		case <-m.outer.Wiped():
+		case <-m.paint.Wiped():
 			return wipedMsg{}
 		case <-m.done:
 			return nil
@@ -125,38 +141,25 @@ func (m *Model) waitWiped() tea.Cmd {
 	}
 }
 
-// target returns the block's cells in the outer terminal and whether the
-// pane shows.
-func (m *Model) target() (cells, bool) {
-	st := m.outer.State()
-	x, y := st.X, st.Y
-	// Herdr's rectangle includes the border it draws round a pane that
-	// shares its tab. The host's window is the inside.
-	bw, bh := st.W-m.winW, st.H-m.winH
-	if m.winW == 0 || (bw != 0 && bw != 2) || (bh != 0 && bh != 2) {
-		// The pane was resized and one of the two sizes is not yet known.
-		// Drawing now could put the image over another pane.
-		return cells{}, false
-	}
-	return cells{x + bw/2 + m.x, y + bh/2 + m.y, m.w, m.h}, st.Visible
+// target returns the cells the painter draws the block in and whether it
+// can be drawn now.
+func (m *Model) target() (Rect, bool) {
+	return m.paint.Place(m.winW, m.winH, Rect{m.x, m.y, m.w, m.h})
 }
 
-// place tells the editor where the block is. In a Herdr pane that is the
-// pane's place in the outer terminal plus the block's place in the pane.
+// place tells the editor where the painter draws the block.
 func (m *Model) place() {
-	at := cells{m.x, m.y, m.w, m.h}
-	if m.outer != nil {
-		at, _ = m.target()
-	}
-	m.ed.SetRect(at.x+1, at.y+1, m.w, m.h)
+	at, _ := m.target()
+	m.ed.SetRect(at.X+1, at.Y+1, m.w, m.h)
 }
 
-// moved handles a change in where the Herdr pane is or whether it shows.
+// moved handles a change in where a detached painter draws the block or
+// whether it shows.
 func (m *Model) moved() tea.Cmd {
 	now, visible := m.target()
 	m.place()
 	if m.painted != nil && (!visible || *m.painted != now) {
-		// Herdr has drawn another view. Parts of the image remain in it.
+		// The terminal shows another view. Parts of the image remain in it.
 		old := *m.painted
 		m.painted = nil
 		return tea.Tick(eraseDelay, func(time.Time) tea.Msg { return eraseMsg(old) })
@@ -217,38 +220,50 @@ func (m *Model) View() string {
 func (m *Model) Update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case updateMsg:
-		return tea.Batch(m.draw(false, false), m.wait())
+		cmds := []tea.Cmd{m.draw(Rows), m.wait()}
+		if m.paint.Detached() {
+			m.partials++
+			n := m.partials
+			cmds = append(cmds, tea.Tick(settleDelay, func(time.Time) tea.Msg { return settleMsg(n) }))
+		}
+		return tea.Batch(cmds...)
+	case settleMsg:
+		// The painter's copy of the image is older than the block. A wipe
+		// now would bring the old one back for a moment.
+		if int(msg) == m.partials && m.painted != nil {
+			return m.draw(Whole)
+		}
 	case redrawMsg:
 		if int(msg) != m.redraws {
 			return nil // a later Redraw is on its way
 		}
-		return m.draw(true, true)
+		return m.draw(Placed)
 	case wipedMsg:
-		// Herdr repainted the block's cells, as it does when its window
-		// gets the keyboard focus back, and the image went with them.
+		// Something repainted the block's cells, as Herdr does when its
+		// window gets the keyboard focus back, and the image went with them.
 		if m.painted != nil {
-			return tea.Batch(m.draw(true, true), m.waitWiped())
+			return tea.Batch(m.draw(Placed), m.waitWiped())
 		}
 		return m.waitWiped()
 	case outerMsg:
 		return tea.Batch(m.moved(), m.waitOuter())
 	case eraseMsg:
-		m.outer.EraseBlank(msg.x, msg.y, msg.w, msg.h)
-		if m.outer.State().Visible {
+		m.paint.Erase(Rect(msg))
+		if _, visible := m.target(); visible {
 			return m.Redraw() // the erased cells may lie under the block's new place
 		}
 	case tea.FocusMsg:
-		// In Herdr the window's return to the keyboard focus is when the
-		// image is most often lost. The helper sees a loss that Herdr's
-		// repaint causes. These two draws cover one it cannot see.
-		if m.outer == nil {
+		// The window's return to the keyboard focus is when a detached
+		// image is most often lost. The painter reports a loss it can see.
+		// These two draws cover one it cannot.
+		if !m.paint.Detached() {
 			return nil
 		}
 		again := func(time.Time) tea.Msg { return againMsg{} }
 		return tea.Batch(tea.Tick(200*time.Millisecond, again), tea.Tick(time.Second, again))
 	case againMsg:
 		if m.painted != nil {
-			return m.draw(false, true)
+			return m.draw(Whole)
 		}
 	case uv.CellSizeEvent:
 		m.ed.SetCellSize(msg.Width, msg.Height)
@@ -257,7 +272,7 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		return m.Redraw()
 	case tea.WindowSizeMsg:
 		m.winW, m.winH = msg.Width, msg.Height
-		if m.outer != nil {
+		if m.paint.Detached() {
 			return m.moved()
 		}
 		// A zoom changes the cell size and reports as a resize.
@@ -294,19 +309,14 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 }
 
 // draw writes the editor's picture: the rows that changed, or every row
-// when whole is set. In a Herdr pane, mark also marks the block's cells
-// again, which a draw after a move or a wipe needs. A whole draw without
-// marks writes the image over itself and never shows the block empty.
-func (m *Model) draw(mark, whole bool) tea.Cmd {
-	if whole {
+// for the other kinds.
+func (m *Model) draw(kind Kind) tea.Cmd {
+	if kind != Rows {
 		m.ed.Invalidate()
 	}
-	var at cells
-	if m.outer != nil {
-		var visible bool
-		if at, visible = m.target(); !visible {
-			return nil // the editor keeps the frame until the pane shows again
-		}
+	at, visible := m.target()
+	if !visible {
+		return nil // the editor keeps the frame until the block shows again
 	}
 	seq := m.ed.Draw()
 	if seq == nil {
@@ -314,16 +324,8 @@ func (m *Model) draw(mark, whole bool) tea.Cmd {
 	}
 	m.draws++
 	m.drawBytes += len(seq)
-	if m.outer != nil {
-		if mark {
-			m.outer.Draw(at.x, at.y, at.w, at.h, seq)
-		} else {
-			m.outer.Write(seq)
-		}
-		m.painted = &at
-		return nil
-	}
-	return tea.Raw(string(seq))
+	m.painted = &at
+	return m.paint.Draw(at, seq, kind)
 }
 
 // Stats returns how many times the image was written and the bytes sent, for

@@ -132,9 +132,7 @@ func (h *host) run(markdown string) (json.RawMessage, error) {
 	if m := multiplexer(); m != "" && os.Getenv("SLATE_FORCE") == "" {
 		return nil, errors.New("this shell runs inside " + m + ", which does not pass Sixel images to the terminal, " +
 			"so the editor would show as an empty box.\n" +
-			"Run slate in a plain Windows Terminal tab, for example:\n" +
-			"  wt -w new cmd /k \"cd /d D:\\slate && bin\\slate notes test.md\"\n" +
-			"Set SLATE_FORCE=1 to start anyway.")
+			"Run slate in a plain Windows Terminal tab, or set SLATE_FORCE=1 to start anyway.")
 	}
 	var pane *herdr.Pane
 	if herdr.Inside() {
@@ -160,7 +158,7 @@ func (h *host) run(markdown string) (json.RawMessage, error) {
 	h.ed, h.block = ed, bubble.New(ed)
 	defer h.block.Close()
 	if pane != nil {
-		h.block.Through(pane)
+		h.block.Through(bubble.Herdr(pane))
 		h.follow = true
 	}
 
