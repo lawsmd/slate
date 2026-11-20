@@ -46,6 +46,8 @@ export interface Target {
   export(source: Source): Exported;
   /** Turns the destination's form back into Markdown, where the target can. */
   import?(body: string): string;
+  /** Names what `import` leaves out of a document, such as "media". */
+  importLoss?(body: string): string[];
 }
 
 export const targets: Record<string, Target> = { markdown, jira };

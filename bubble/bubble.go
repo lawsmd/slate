@@ -20,6 +20,7 @@ import (
 	uv "github.com/charmbracelet/ultraviolet"
 
 	"github.com/lawsmd/slate"
+	"github.com/lawsmd/slate/herdr"
 	"github.com/lawsmd/slate/link"
 )
 
@@ -64,14 +65,24 @@ type Model struct {
 	redraws    int                // counts calls to Redraw; only the newest one draws
 	partials   int                // counts draws of changed rows; the newest one settles
 	covered    bool               // the host shows something over the block
+
+	// Set by Open, which made the editor and chose the painter.
+	owned    bool        // Close closes the editor and the pane
+	pane     *herdr.Pane // nil outside Herdr
+	terminal slate.Theme // as last read from the terminal's settings
+	custom   slate.Theme // the host's own theme, kept on top of the terminal's
 }
 
-// New wraps an editor. The caller still owns the editor and closes it.
-func New(ed *slate.Editor) *Model {
+// New wraps an editor. The caller still owns the editor and closes it, and
+// chooses the painter with Through. Open does all of that for a host that
+// has no reason to do it by hand.
+func New(ed *slate.Editor) *Model { return newModel(ed, true) }
+
+func newModel(ed *slate.Editor, linked bool) *Model {
 	m := &Model{ed: ed, paint: stdout{}, done: make(chan struct{})}
 	// Other programs of this user can read and edit the document through
 	// package link, unless SLATE_LINK=0 is set. They cannot save or send it.
-	if link.Enabled() {
+	if linked && link.Enabled() {
 		m.reg, _ = link.Register(ed, link.Info{})
 	}
 	return m
@@ -90,9 +101,18 @@ func (m *Model) Describe(title string, meta map[string]string) {
 // program starts.
 func (m *Model) Through(p Painter) { m.paint = p }
 
-// Close stops the model's waiting commands. It does not close the editor. With a
-// detached painter it also removes the image, which would stay behind.
+// Close stops the model's waiting commands. With a detached painter it also
+// removes the image, which would stay behind. It closes the editor only for
+// a model that Open made.
 func (m *Model) Close() {
+	defer func() {
+		if m.owned {
+			m.ed.Close()
+			if m.pane != nil {
+				m.pane.Close()
+			}
+		}
+	}()
 	close(m.done)
 	if m.reg != nil {
 		m.reg.Close()
@@ -111,6 +131,12 @@ func (m *Model) Init() tea.Cmd {
 	}
 	if m.paint.Wiped() != nil {
 		cmds = append(cmds, m.waitWiped())
+	}
+	if m.owned {
+		cmds = append(cmds, tea.RequestBackgroundColor, tea.RequestForegroundColor)
+		if m.pane != nil {
+			cmds = append(cmds, watchTheme())
+		}
 	}
 	return tea.Batch(cmds...)
 }
@@ -240,6 +266,9 @@ func (m *Model) View() string {
 // Update handles keys, mouse events, pastes and the model's own messages.
 // Pass it every message the host does not consume itself.
 func (m *Model) Update(msg tea.Msg) tea.Cmd {
+	if cmd, ok := m.terminalTheme(msg); ok {
+		return cmd
+	}
 	switch msg := msg.(type) {
 	case updateMsg:
 		cmds := []tea.Cmd{m.draw(Rows), m.wait()}

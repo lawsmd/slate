@@ -681,11 +681,15 @@ func (e *Editor) Export(ctx context.Context, target string) (Payload, error) {
 }
 
 // Import replaces the document with one in the form of the editor's target,
-// such as a comment fetched for editing. It fails for a target that has no
-// way back to Markdown.
-func (e *Editor) Import(ctx context.Context, body string) error {
-	_, err := get[json.RawMessage](ctx, e, "slate.import", body)
-	return err
+// such as a Jira comment fetched for editing. It fails for a target that has
+// no way back to Markdown.
+//
+// left names what the document held that Markdown has no form for and the
+// editor does not show: for "jira", "media" for attached images and files.
+// Exporting the edited document and sending it over the original removes
+// those, so a host should warn the user first when left is not empty.
+func (e *Editor) Import(ctx context.Context, body string) (left []string, err error) {
+	return get[[]string](ctx, e, "slate.import", body)
 }
 
 // SetTarget changes where the document goes. The syntax the editor accepts

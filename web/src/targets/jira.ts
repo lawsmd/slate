@@ -5,6 +5,7 @@ import { parser as baseParser, GFM } from "@lezer/markdown";
 import type { SyntaxNode, Tree } from "@lezer/common";
 import { calloutPanels, calloutPattern, mentionScheme } from "../syntax";
 import type { Loss, Source, Target } from "./index";
+import { fromADF, lostOnImport } from "./jira-import";
 
 const syntax = [GFM];
 const mdParser = baseParser.configure(syntax);
@@ -67,6 +68,8 @@ export const jira: Target = {
     mime: "application/json",
     body: JSON.stringify(toADF(source.text, source.tree)),
   }),
+  import: (body) => fromADF(body),
+  importLoss: lostOnImport,
 };
 
 class Converter {

@@ -70,9 +70,16 @@ bin\slate comment -o out.json    # write a comment; ctrl+s writes it as ADF
 bin\slate shot -o out.png file.md  # render to a PNG without a terminal
 ```
 
-`f1` lists the keys. `ctrl+q` quits.
+`f1` lists the keys. `ctrl+q` quits. With `SLATE_KEYLOG` set to a file path, the demo
+host writes there each key press as the terminal reported it.
 
 ## Using slate from a host
+
+A Bubble Tea v2 program embeds slate with one call, `bubble.Open`, and four methods of
+the block it returns. [EMBEDDING.md](EMBEDDING.md) is the guide, and
+`examples/embed/main.go` is a complete small host.
+
+A host on another framework drives the editor directly:
 
 ```go
 slate.Warm()                      // at startup: start the browser in the background
@@ -94,10 +101,7 @@ out, _ := ed.Export(ctx, "")      // the document in its target's form
 
 The host must leave the block's cells alone between draws: text written over a cell
 erases the image there. After a popup over the block closes, or the screen is cleared,
-call `ed.Invalidate()` and draw again.
-
-A Bubble Tea v2 host uses the `bubble` package, which does this bookkeeping. See
-`cmd/slate/host.go`.
+call `ed.Invalidate()` and draw again. The `bubble` package does this bookkeeping.
 
 ### Calls and the browser
 
@@ -146,6 +150,8 @@ therefore drawn around Herdr:
 6. When the pane reports that it has the keyboard focus again, slate also writes the
    whole image 200 ms and one second later, for a loss the helper cannot see.
 
+`bubble.Open` does this for a host. By hand it is:
+
 ```go
 if herdr.Inside() {
     pane, err := herdr.Open()
@@ -178,7 +184,7 @@ corruption stays until Herdr's next full redraw.
 The helper is the host's own executable, started again with `SLATE_HERDR_HELPER` set. The
 `herdr` package's `init` handles that, so the host needs no code for it.
 
-A Herdr pane answers no colour query, so the demo host reads the colour scheme and font
+A Herdr pane answers no colour query, so `bubble.Open` reads the colour scheme and font
 from Windows Terminal's `settings.json` with `slate.WindowsTerminalTheme()`, and reads it
 again every two seconds to follow a change of scheme.
 
@@ -221,8 +227,9 @@ export parse with the same extensions.
 
 `ed.Export(ctx, "")` returns the document in the editor's target's form, and
 `ed.Export(ctx, "jira")` in a named one's. `ed.Import(ctx, body)` loads a document from
-the target's form where the target can convert it back; `markdown` can and `jira` cannot
-yet. `ed.ADF(ctx)` is `Export` for `jira`.
+the target's form, such as a Jira comment fetched for editing, and returns the names of
+what it had to leave out. For `jira` that is `media`, the attached images and files, which
+Markdown has no form for. `ed.ADF(ctx)` is `Export` for `jira`.
 
 A target also lists what it cannot carry as written. The editor underlines each such
 stretch with a wavy line, and `ed.Unsupported(ctx)` returns them with what the export
@@ -247,7 +254,7 @@ byte offsets into the Markdown:
 Package `link` lets another program of the same user read and edit the documents open in
 slate editors, so that a person and a language model can write one together. A `bubble`
 host registers its editor when it starts. `SLATE_LINK=0` in the host's environment turns
-that off.
+that off for every editor of the host, and `bubble.Config.Private` for one.
 
 ```
 slate ls                                   # the editors open on this machine
@@ -298,6 +305,10 @@ is typed by hand; `alt+l` or a click on the language label opens the language li
 A line break inside a paragraph exports as a `hardBreak`, because the editor shows it as
 a new line.
 
+The import reads the same table from right to left. It also keeps the text of an emoji,
+a status, a date and a smart link, drops text colour and underline, and leaves out
+attachments (`web/src/targets/jira-import.ts`).
+
 ## Layout
 
 | Path | Contents |
@@ -307,7 +318,9 @@ a new line.
 | `wt.go` | colours and font from Windows Terminal's settings |
 | `browser/` | finds and starts Edge, DevTools protocol over a pipe |
 | `sixel/` | colour quantiser and Sixel encoder |
-| `bubble/` | Bubble Tea v2 adapter and its painters |
+| `bubble/` | Bubble Tea v2 adapter: `Open`, the block, its painters |
+| `examples/embed/` | a small host with a comment box in a panel |
+| `EMBEDDING.md` | how to put a block in another program |
 | `link/` | reading and editing open editors from another program |
 | `herdr/` | draws from inside a Herdr pane (Windows) |
 | `term/` | raw terminal access, used by the bench |

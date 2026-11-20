@@ -360,15 +360,25 @@ func TestTargets(t *testing.T) {
 	if err != nil || len(losses) != 1 || !strings.Contains(losses[0].Reason, "link") {
 		t.Fatalf("what jira cannot carry: %+v, %v", losses, err)
 	}
-	if err := ed.Import(ctx, "{}"); err == nil {
-		t.Fatal("the jira target has no import and should say so")
+	if _, err := ed.Import(ctx, "{}"); err == nil {
+		t.Fatal("importing what is not an ADF document should fail")
+	}
+	comment := `{"version":1,"type":"doc","content":[
+		{"type":"paragraph","content":[{"type":"text","text":"From "},{"type":"text","text":"Jira","marks":[{"type":"strong"}]}]},
+		{"type":"mediaSingle","content":[{"type":"media","attrs":{"id":"1","type":"file","collection":""}}]}]}`
+	left, err := ed.Import(ctx, comment)
+	if err != nil || len(left) != 1 || left[0] != "media" {
+		t.Fatalf("import of a comment with an attachment: %v, %v", left, err)
+	}
+	if got, err := ed.Markdown(ctx); err != nil || got != "From **Jira**" {
+		t.Fatalf("the imported comment: %q, %v", got, err)
 	}
 
 	ed.SetTarget("markdown")
 	if losses, err := ed.Unsupported(ctx); err != nil || len(losses) != 0 {
 		t.Fatalf("markdown carries everything: %+v, %v", losses, err)
 	}
-	if err := ed.Import(ctx, "new *text*"); err != nil {
+	if _, err := ed.Import(ctx, "new *text*"); err != nil {
 		t.Fatal(err)
 	}
 

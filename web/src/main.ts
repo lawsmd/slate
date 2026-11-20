@@ -198,10 +198,15 @@ const api = {
     return tg.export(parse(tg, view.state.doc.toString()));
   },
 
-  /** Replaces the document with one in the current target's form. */
-  import(body: string): void {
+  /**
+   * Replaces the document with one in the current target's form. Returns
+   * what the document held that Markdown has no form for and was left out.
+   */
+  import(body: string): string[] {
     if (!current.import) throw new Error(`the ${current.name} target cannot import`);
-    api.setMarkdown(current.import(body));
+    const markdown = current.import(body);
+    api.setMarkdown(markdown);
+    return current.importLoss?.(body) ?? [];
   },
 
   /** The syntax tree as plain data, parsed with the current target's syntax. */

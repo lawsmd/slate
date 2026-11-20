@@ -19,7 +19,6 @@ import (
 
 	"github.com/lawsmd/slate"
 	"github.com/lawsmd/slate/bubble"
-	"github.com/lawsmd/slate/herdr"
 )
 
 // demoUsers stands in for a platform's user search.
@@ -72,8 +71,6 @@ type host struct {
 	result json.RawMessage // the submitted comment
 	err    error
 
-	theme        slate.Theme // from Windows Terminal's settings; followed in a Herdr pane
-	follow       bool
 	cellW, cellH int    // as reported by the terminal
 	background   string // as reported by the terminal
 }
@@ -114,63 +111,24 @@ func comment(args []string) error {
 	return err
 }
 
-// multiplexer names the terminal multiplexer this process runs under, or "".
-// A multiplexer redraws its panes cell by cell and drops the image. Herdr is
-// handled apart: the image goes around it.
-func multiplexer() string {
-	for _, m := range []struct{ env, name string }{
-		{"TMUX", "tmux"}, {"ZELLIJ", "Zellij"},
-	} {
-		if os.Getenv(m.env) != "" {
-			return m.name
-		}
-	}
-	return ""
-}
-
 func (h *host) run(markdown string) (json.RawMessage, error) {
-	if m := multiplexer(); m != "" && os.Getenv("SLATE_FORCE") == "" {
-		return nil, errors.New("this shell runs inside " + m + ", which does not pass Sixel images to the terminal, " +
-			"so the editor would show as an empty box.\n" +
-			"Run slate in a plain Windows Terminal tab, or set SLATE_FORCE=1 to start anyway.")
+	cfg := bubble.Config{
+		Options: slate.Options{Markdown: markdown, Target: "markdown", Mentions: demoMentions},
+		Title:   "new comment",
 	}
-	var pane *herdr.Pane
-	if herdr.Inside() {
-		var err error
-		if pane, err = herdr.Open(); err != nil {
-			return nil, fmt.Errorf("this shell runs inside Herdr, and slate could not reach the terminal behind it: %w", err)
-		}
-		defer pane.Close()
-	}
-	// The terminal has no escape sequence that reports its font, and a Herdr
-	// pane answers no colour query, so both start from the settings file.
-	// Colours the terminal does report replace these.
-	theme, _ := slate.WindowsTerminalTheme()
-	h.theme = theme
-	if pane == nil {
-		theme.Background, theme.Foreground, theme.Selection = "", "", ""
-	}
-	target := "markdown"
 	if h.path == "" {
-		target = "jira" // a comment is written for Jira
+		cfg.Target = "jira" // a comment is written for Jira
+	} else {
+		abs, _ := filepath.Abs(h.path)
+		cfg.Title, cfg.Meta = "note "+filepath.Base(h.path), map[string]string{"file": abs}
 	}
-	ed, err := slate.New(slate.Options{Markdown: markdown, Target: target, Mentions: demoMentions, Theme: theme})
+	// Open chooses how to draw in this terminal and takes its colours.
+	block, err := bubble.Open(cfg)
 	if err != nil {
 		return nil, err
 	}
-	defer ed.Close()
-	h.ed, h.block = ed, bubble.New(ed)
-	defer h.block.Close()
-	if h.path != "" {
-		abs, _ := filepath.Abs(h.path)
-		h.block.Describe("note "+filepath.Base(h.path), map[string]string{"file": abs})
-	} else {
-		h.block.Describe("new comment", nil)
-	}
-	if pane != nil {
-		h.block.Through(bubble.Herdr(pane))
-		h.follow = true
-	}
+	defer block.Close()
+	h.ed, h.block = block.Editor(), block
 
 	var opts []tea.ProgramOption
 	if !term.IsTerminal(int(os.Stdout.Fd())) {
@@ -194,24 +152,8 @@ func (h *host) waitEvent() tea.Cmd {
 	return func() tea.Msg { return eventMsg{<-h.ed.Events()} }
 }
 
-// themeMsg is the theme read again from Windows Terminal's settings.
-type themeMsg slate.Theme
-
-// watchTheme reads the settings again after a pause. A change of colour
-// scheme in Windows Terminal then reaches the editor in a Herdr pane.
-func watchTheme() tea.Cmd {
-	return tea.Tick(2*time.Second, func(time.Time) tea.Msg {
-		t, _ := slate.WindowsTerminalTheme()
-		return themeMsg(t)
-	})
-}
-
 func (h *host) Init() tea.Cmd {
-	cmds := []tea.Cmd{h.block.Init(), h.waitEvent(), tea.RequestBackgroundColor, tea.RequestForegroundColor}
-	if h.follow {
-		cmds = append(cmds, watchTheme())
-	}
-	return tea.Batch(cmds...)
+	return tea.Batch(h.block.Init(), h.waitEvent())
 }
 
 func (h *host) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -229,22 +171,10 @@ func (h *host) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			h.status = warn.Render(ev.Op + " failed: " + ev.Err.Error())
 		}
 		return h, h.waitEvent()
-	case themeMsg:
-		if t := slate.Theme(msg); t.Background != h.theme.Background || t.Foreground != h.theme.Foreground ||
-			t.Selection != h.theme.Selection || t.MonoFont != h.theme.MonoFont {
-			h.theme = t
-			h.ed.SetTheme(t)
-		}
-		return h, watchTheme()
 	case uv.CellSizeEvent:
 		h.cellW, h.cellH = msg.Width, msg.Height
 	case tea.BackgroundColorMsg:
-		h.background = msg.String()
-		h.ed.SetTheme(slate.Theme{Background: msg.String()})
-		return h, nil
-	case tea.ForegroundColorMsg:
-		h.ed.SetTheme(slate.Theme{Foreground: msg.String()})
-		return h, nil
+		h.background = msg.String() // for the trace; the block takes the colour
 	case tea.KeyPressMsg:
 		// SLATE_KEYLOG names a file that gets each key press as the terminal
 		// reported it, for working out why a key does nothing.
