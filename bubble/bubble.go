@@ -20,7 +20,6 @@ import (
 	uv "github.com/charmbracelet/ultraviolet"
 
 	"github.com/lawsmd/slate"
-	"github.com/lawsmd/slate/herdr"
 	"github.com/lawsmd/slate/link"
 )
 
@@ -67,10 +66,11 @@ type Model struct {
 	covered    bool               // the host shows something over the block
 
 	// Set by Open, which made the editor and chose the painter.
-	owned    bool        // Close closes the editor and the pane
-	pane     *herdr.Pane // nil outside Herdr
-	terminal slate.Theme // as last read from the terminal's settings
-	custom   slate.Theme // the host's own theme, kept on top of the terminal's
+	owned     bool        // Close closes the editor and the host's painter
+	closeHost func()      // closes the painter Open chose
+	mute      bool        // the host answers no colour query
+	terminal  slate.Theme // as last read from the terminal's settings
+	custom    slate.Theme // the host's own theme, kept on top of the terminal's
 }
 
 // New wraps an editor. The caller still owns the editor and closes it, and
@@ -108,9 +108,7 @@ func (m *Model) Close() {
 	defer func() {
 		if m.owned {
 			m.ed.Close()
-			if m.pane != nil {
-				m.pane.Close()
-			}
+			m.closeHost()
 		}
 	}()
 	close(m.done)
@@ -134,7 +132,7 @@ func (m *Model) Init() tea.Cmd {
 	}
 	if m.owned {
 		cmds = append(cmds, tea.RequestBackgroundColor, tea.RequestForegroundColor)
-		if m.pane != nil {
+		if m.mute {
 			cmds = append(cmds, watchTheme())
 		}
 	}

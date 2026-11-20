@@ -1,15 +1,11 @@
 package bubble
 
 import (
-	"errors"
-	"fmt"
-	"os"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/lawsmd/slate"
-	"github.com/lawsmd/slate/herdr"
 )
 
 // Config describes the block that Open makes.
@@ -27,42 +23,46 @@ type Config struct {
 	// Private keeps the document out of package link: no other program can
 	// read or edit it.
 	Private bool
+
+	// Painter puts the image on the screen. Leave it nil and Open chooses
+	// one for the terminal or multiplexer the program runs in. The caller
+	// closes a painter it sets here.
+	Painter Painter
 }
 
 // Open makes an editor and its block, ready for the terminal the host runs
 // in. It is what a host needs in place of slate.New, New and Through:
 //
-//   - In a Herdr pane it draws around Herdr (see package herdr).
+//   - It finds the terminal or multiplexer the program runs in among the
+//     hosts slate knows and those added with Register, and takes that host's
+//     painter. In a Herdr pane it draws around Herdr (see package herdr).
+//     Config.Painter names the painter and skips the search.
 //   - It takes colours and the code font from Windows Terminal's settings
-//     where they can be read, follows a change of colour scheme in a Herdr
-//     pane, and uses the colours the terminal itself reports.
+//     where they can be read, follows a change of colour scheme in a host
+//     that answers no colour query, and otherwise uses the colours the
+//     terminal itself reports.
 //   - It refuses to start under tmux or Zellij, which drop the image, unless
 //     SLATE_FORCE=1 is set.
 //
 // The model owns what Open made: Close closes the editor as well. Editor
 // returns the editor, for reading and exporting the document.
 func Open(cfg Config) (*Model, error) {
-	if os.Getenv("SLATE_FORCE") == "" {
-		for _, m := range []struct{ env, name string }{{"TMUX", "tmux"}, {"ZELLIJ", "Zellij"}} {
-			if os.Getenv(m.env) != "" {
-				return nil, errors.New("this shell runs inside " + m.name + ", which does not pass Sixel images " +
-					"to the terminal, so the editor would show as an empty box. " +
-					"Run in a plain terminal tab, or set SLATE_FORCE=1 to start anyway")
-			}
-		}
-	}
-	var pane *herdr.Pane
-	if herdr.Inside() {
+	paint, host := cfg.Painter, Host{}
+	if paint == nil {
 		var err error
-		if pane, err = herdr.Open(); err != nil {
-			return nil, fmt.Errorf("this shell runs inside Herdr, and slate could not reach the terminal behind it: %w", err)
+		if paint, host, err = findPainter(); err != nil {
+			return nil, err
 		}
 	}
-	// The terminal has no escape sequence that reports its font, and a Herdr
-	// pane answers no colour query, so both start from the settings file.
-	// Outside Herdr the terminal reports its colours itself.
+	closeHost := func() {}
+	if c, ok := paint.(interface{ Close() }); ok && cfg.Painter == nil {
+		closeHost = c.Close
+	}
+	// The terminal has no escape sequence that reports its font, and a mute
+	// host answers no colour query, so both start from the settings file.
+	// Elsewhere the terminal reports its colours itself.
 	terminal, _ := slate.WindowsTerminalTheme()
-	if pane == nil {
+	if !host.Mute {
 		terminal.Background, terminal.Foreground, terminal.Selection = "", "", ""
 	}
 	opts := cfg.Options
@@ -70,18 +70,14 @@ func Open(cfg Config) (*Model, error) {
 	opts.Theme = terminal
 	ed, err := slate.New(opts)
 	if err != nil {
-		if pane != nil {
-			pane.Close()
-		}
+		closeHost()
 		return nil, err
 	}
 	ed.SetTheme(custom)
 
 	m := newModel(ed, !cfg.Private)
-	m.owned, m.pane, m.terminal, m.custom = true, pane, terminal, custom
-	if pane != nil {
-		m.paint = Herdr(pane)
-	}
+	m.owned, m.closeHost, m.mute, m.terminal, m.custom = true, closeHost, host.Mute, terminal, custom
+	m.paint = paint
 	if cfg.Title != "" || cfg.Meta != nil {
 		m.Describe(cfg.Title, cfg.Meta)
 	}
@@ -94,7 +90,7 @@ func (m *Model) Editor() *slate.Editor { return m.ed }
 // themeMsg is the theme read again from Windows Terminal's settings.
 type themeMsg slate.Theme
 
-// themeEvery is how often a block in a Herdr pane reads the settings again.
+// themeEvery is how often a block in a mute host reads the settings again.
 const themeEvery = 2 * time.Second
 
 func watchTheme() tea.Cmd {

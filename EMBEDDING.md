@@ -48,7 +48,9 @@ ed := block.Editor()
 
 `bubble.Open` detects Herdr, takes the terminal's colours and code font, and returns an
 error under tmux or Zellij, which drop the image. A host needs `slate.New`, `bubble.New`
-and `Through` only to do one of those differently.
+and `Through` only to do one of those differently. To draw in a multiplexer slate has no
+painter for, write a `bubble.Painter` and add it with `bubble.Register` before the first
+`Open`, or set `Config.Painter`. `README.md` shows how under "Other multiplexers".
 
 Without `Warm`, the first block takes about 0.8 s to open and later ones about 0.3 s.
 With `Warm` at startup, a block opened a second later appears at once.

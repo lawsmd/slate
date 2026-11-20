@@ -165,8 +165,25 @@ if herdr.Inside() {
 ```
 
 `bubble.Model` writes the image through a `bubble.Painter`. The default painter writes
-through Bubble Tea. `bubble.Herdr` is the painter for a Herdr pane, and another
-multiplexer needs only another painter.
+through Bubble Tea, and `bubble.Herdr` is the painter for a Herdr pane.
+
+### Other multiplexers
+
+`bubble.Open` looks through a list of hosts (`bubble.Host`) for the one the program runs
+in. slate's list holds tmux and Zellij, which it refuses, and Herdr. A program that runs in
+another multiplexer writes a painter for it and adds a host before the first `Open`:
+
+```go
+bubble.Register(bubble.Host{
+    Name:   "mymux",
+    Detect: func() bool { return os.Getenv("MYMUX") != "" },
+    Open:   func() (bubble.Painter, error) { return newMymuxPainter() },
+    Mute:   true, // the pane answers no colour query
+})
+```
+
+A registered host is tried before slate's own. `bubble.Config.Painter` skips the search and
+uses the painter it names.
 
 ### Focus blink
 
