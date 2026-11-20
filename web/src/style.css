@@ -36,6 +36,8 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--sl-bg)
 #root .cm-content { padding: 8px 0; caret-color: var(--sl-fg); }
 #root .cm-line { padding: 0 14px; }
 #root .cm-cursor { border-left: 2px solid var(--sl-fg); }
+/* The hidden half of the blink. See blink.ts. */
+.sl-cursor-off #root .cm-cursorLayer { visibility: hidden; }
 #root .cm-selectionBackground { background: var(--sl-selection); }
 
 #root .sl-dim { color: var(--sl-dim); }

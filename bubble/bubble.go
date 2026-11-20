@@ -294,7 +294,9 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 	switch msg := msg.(type) {
 	case updateMsg:
 		cmds := []tea.Cmd{m.draw(Rows), m.wait()}
-		if m.paint.Detached() {
+		// A blink of the cursor is not worth a whole image: the painter's
+		// copy may show the cursor in its other state.
+		if m.paint.Detached() && !m.ed.Blinked() {
 			m.partials++
 			n := m.partials
 			cmds = append(cmds, tea.Tick(settleDelay, func(time.Time) tea.Msg { return settleMsg(n) }))

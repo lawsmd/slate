@@ -9,6 +9,7 @@ import { tags as t } from "@lezer/highlight";
 import { toDoc } from "./doc";
 import { defaultTarget, parse, target, type Exported, type Target } from "./targets";
 import { defaultRender, renderCompartment, renderConfig, trackFocus, type RenderConfig } from "./config";
+import { blink, setSteady } from "./blink";
 import { applyEdit, editMarks, origin, type Edit } from "./edits";
 import { notifyHost, resolveHost } from "./host";
 import { openLanguagePicker } from "./langpicker";
@@ -124,7 +125,8 @@ const view = new EditorView({
     doc: "",
     extensions: [
       history(),
-      drawSelection({ cursorBlinkRate: 0 }),
+      drawSelection({ cursorBlinkRate: 0 }), // blink.ts blinks the cursor
+    blink,
       EditorView.lineWrapping,
       EditorState.tabSize.of(4),
       keymap.of([...slateKeymap, ...completionKeymap]),
@@ -161,6 +163,8 @@ interface Settings {
   theme?: Record<string, string>;
   /** The name of the target to write for. */
   target?: string;
+  /** Whether the cursor shows without blinking. */
+  steady?: boolean;
 }
 
 /** The host's own render choices, kept so a change of target can rebuild on them. */
@@ -248,6 +252,7 @@ const api = {
     for (const [name, value] of Object.entries(settings.theme ?? {})) {
       document.documentElement.style.setProperty("--sl-" + name, value);
     }
+    if (settings.steady !== undefined) setSteady(settings.steady);
     view.requestMeasure();
   },
 

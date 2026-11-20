@@ -59,8 +59,13 @@ func (e *Editor) receive(pg *page, raw json.RawMessage) {
 		draw.Draw(rgba, rgba.Bounds(), img, img.Bounds().Min, draw.Src)
 		f = frame{rgba.Pix, rgba.Stride, size.X, size.Y}
 	}
+	// Both are read and cleared, whichever is set.
+	blinked, touched := e.blinked.Swap(false), e.touched.Swap(false)
 	e.mu.Lock()
 	e.frame = f
+	if !blinked || touched {
+		e.fresh = true
+	}
 	e.mu.Unlock()
 	select {
 	case e.updates <- struct{}{}:
@@ -117,10 +122,23 @@ func (e *Editor) Draw() []byte {
 		r = end
 	}
 	if out == nil {
+		e.fresh = false // the frames since the last Draw showed nothing new
 		return nil
 	}
 	e.shown = append(e.shown[:0], f.pix...)
+	e.blinkDrawn = same && !e.fresh
+	e.fresh = false
 	return append(out, "\x1b8"...)
+}
+
+// Blinked reports whether the last Draw that returned something sent only
+// the cursor's blink: the cursor hidden or shown again, and nothing else
+// new. A host that does further work after each change of the picture can
+// leave it out then.
+func (e *Editor) Blinked() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.blinkDrawn
 }
 
 // Invalidate makes the next Draw send the whole block. Call it after the

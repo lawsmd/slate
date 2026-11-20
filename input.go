@@ -204,6 +204,7 @@ func (e *Editor) Selected(cut bool) <-chan string {
 		e.eval(e.pg.Load(), &s, "slate.selection", cut)
 		out <- s
 	}
+	e.touched.Store(true)
 	select {
 	case e.queue <- run:
 	case <-e.done:

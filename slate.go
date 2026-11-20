@@ -95,6 +95,10 @@ type Options struct {
 	// The default is 10 by 20.
 	CellWidth, CellHeight int
 
+	// SteadyCursor shows the cursor without blinking. By default it blinks
+	// while the editor has focus.
+	SteadyCursor bool
+
 	// BrowserPath is the browser executable. Empty means look for Edge,
 	// then Chrome. The editors of a process share one browser, so the path
 	// counts only when it starts that browser.
@@ -155,12 +159,19 @@ type Editor struct {
 	modified atomic.Bool
 	close    sync.Once
 
+	// What happened since the last frame, to tell a frame that only blinks
+	// the cursor from one that shows something new.
+	blinked atomic.Bool // the page hid or showed the cursor
+	touched atomic.Bool // a call went to the page or the document changed
+
 	mu           sync.Mutex // guards the fields below
 	col, row     int
 	cols, rows   int
 	cellW, cellH int
 	frame        frame  // the newest frame from the browser
 	shown        []byte // the pixels of the frame last drawn
+	fresh        bool   // a frame since the last Draw showed more than a blink
+	blinkDrawn   bool   // the last Draw sent only a blink
 	enc          sixel.Encoder
 	click        clickState
 
@@ -294,6 +305,9 @@ func (e *Editor) load(pg *page) error {
 	if e.target != "" {
 		settings["target"] = e.target
 	}
+	if e.opts.SteadyCursor {
+		settings["steady"] = true
+	}
 	doc, head, focus := e.doc, e.head, e.focus
 	e.loading, e.revBase = true, e.rev
 	e.mu.Unlock()
@@ -349,7 +363,10 @@ func (e *Editor) fromPage(pg *page, raw json.RawMessage) {
 	switch msg.Type {
 	case "ready":
 		pg.readyOnce.Do(func() { close(pg.ready) })
+	case "blink":
+		e.blinked.Store(true)
 	case "change":
+		e.touched.Store(true)
 		e.mu.Lock()
 		e.rev = e.revBase + msg.Rev
 		e.head = msg.Head
@@ -376,6 +393,7 @@ func (e *Editor) answerMentions(pg *page, id int, query string) {
 			users = found
 		}
 	}
+	e.touched.Store(true)
 	e.eval(pg, nil, "slate.resolve", id, users)
 }
 
@@ -450,6 +468,7 @@ func (e *Editor) post(op string, f func(pg *page) error) {
 			e.emit(Failed{Op: op, Err: err})
 		}
 	}
+	e.touched.Store(true)
 	select {
 	case e.queue <- run:
 	case <-e.done:
@@ -468,6 +487,7 @@ func ask[T any](ctx context.Context, e *Editor, f func(pg *page) (T, error)) (T,
 		v, err := f(e.pg.Load())
 		ch <- result{v, err}
 	}
+	e.touched.Store(true)
 	select {
 	case e.queue <- run:
 	case <-e.done:

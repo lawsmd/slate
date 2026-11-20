@@ -402,3 +402,104 @@ func TestTargets(t *testing.T) {
 		t.Fatalf("tree: %s", raw)
 	}
 }
+
+func TestDrawTellsABlinkFromNewContent(t *testing.T) {
+	e := &Editor{col: 1, row: 1, cols: 4, rows: 3, cellW: 2, cellH: 6}
+	frame := func(c byte, blinked, touched bool) {
+		e.blinked.Store(blinked)
+		e.touched.Store(touched)
+		blinked, touched = e.blinked.Swap(false), e.touched.Swap(false)
+		e.frame = solid(8, 18, c)
+		if !blinked || touched {
+			e.fresh = true
+		}
+	}
+
+	frame(10, true, false)
+	if e.Draw() == nil || e.Blinked() {
+		t.Fatal("the first draw sends the whole block, which is more than a blink")
+	}
+	frame(20, true, false)
+	if e.Draw() == nil || !e.Blinked() {
+		t.Fatal("a frame after the page's word of a blink should count as a blink")
+	}
+	frame(30, true, true)
+	if e.Draw() == nil || e.Blinked() {
+		t.Fatal("a blink together with a call to the page is new content")
+	}
+	frame(40, false, false)
+	frame(50, true, false)
+	if e.Draw() == nil || e.Blinked() {
+		t.Fatal("a blink drawn together with an earlier frame is new content")
+	}
+	frame(50, false, false)
+	if e.Draw() != nil {
+		t.Fatal("a frame with the same pixels should draw nothing")
+	}
+	frame(55, true, false)
+	if e.Draw() == nil || !e.Blinked() {
+		t.Fatal("a blink after a frame that showed nothing new is still a blink")
+	}
+	frame(60, true, false)
+	e.Invalidate()
+	if e.Draw() == nil || e.Blinked() {
+		t.Fatal("a whole block is more than a blink")
+	}
+}
+
+// TestCursorBlinks runs the real editor and counts the frames it sends while
+// nothing is typed.
+func TestCursorBlinks(t *testing.T) {
+	browserTest(t)
+	// blinks draws for a while and returns how many draws were blinks and
+	// how many were not.
+	blinks := func(ed *Editor, wait time.Duration) (blinks, others int) {
+		timeout := time.After(wait)
+		for {
+			select {
+			case <-ed.Updates():
+				if ed.Draw() == nil {
+					continue
+				}
+				if ed.Blinked() {
+					blinks++
+				} else {
+					others++
+				}
+			case <-timeout:
+				return blinks, others
+			}
+		}
+	}
+
+	ed, err := New(Options{Markdown: "text\n", Cols: 40, Rows: 6})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ed.Close()
+	blinks(ed, time.Second) // the first frames
+	if n, others := blinks(ed, 3*time.Second); n < 3 || n > 6 || others != 0 {
+		t.Fatalf("an idle editor with focus drew %d blinks and %d other frames in 3 s, want 3 to 6 blinks only", n, others)
+	}
+
+	ed.Key(Key{Name: "x"})
+	if _, others := blinks(ed, 400*time.Millisecond); others == 0 {
+		t.Fatal("a typed character should draw as new content")
+	}
+
+	ed.Focus(false)
+	blinks(ed, 500*time.Millisecond) // the frame that hides the cursor
+	if n, others := blinks(ed, 2*time.Second); n+others != 0 {
+		t.Fatalf("an editor without focus drew %d blinks and %d other frames", n, others)
+	}
+
+	steady, err := New(Options{Markdown: "text\n", Cols: 40, Rows: 6, SteadyCursor: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer steady.Close()
+	blinks(steady, time.Second)
+	if n, others := blinks(steady, 2*time.Second); n+others != 0 {
+		t.Fatalf("a steady cursor drew %d blinks and %d other frames", n, others)
+	}
+}

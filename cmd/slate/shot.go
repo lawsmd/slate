@@ -32,7 +32,9 @@ func shot(args []string) error {
 		}
 	}
 	start := time.Now()
-	ed, err := slate.New(slate.Options{Markdown: string(doc), Cols: *cols, Rows: *rows, Mentions: demoMentions})
+	ed, err := slate.New(slate.Options{Markdown: string(doc), Cols: *cols, Rows: *rows, Mentions: demoMentions,
+		SteadyCursor: true, // the picture does not depend on when it is taken
+	})
 	if err != nil {
 		return err
 	}

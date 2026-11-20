@@ -93,6 +93,10 @@ The editor types whatever keys the host passes to `Update`. To move the keyboard
 from the block, stop passing key presses and call `ed.Focus(false)`, which hides the
 cursor. `ed.Focus(true)` shows it again.
 
+The cursor blinks while the editor has focus: 600 ms shown, 600 ms hidden, and shown
+again at each key press or click. `SteadyCursor` in `slate.Options`, which
+`bubble.Config` embeds, turns the blink off.
+
 The block uses these keys when it receives them: `ctrl+c` and `ctrl+x` (copy and cut to
 the system clipboard), `ctrl+z` and `ctrl+y`, `ctrl+b`, `ctrl+i` and `ctrl+e` (bold,
 italic, inline code), `alt+l` (choose a code block's language), `ctrl+backspace`, and
