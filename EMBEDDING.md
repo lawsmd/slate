@@ -167,11 +167,15 @@ another pane can read the draft and propose text while the user watches:
 
 ```
 slate ls
-slate read ID
-slate edit -old TEXT -new TEXT -by claude ID
+slate read -json ID
+slate edit -new-file draft.md -if-rev 7 -by claude ID
+slate edit -own -new-file draft2.md -if-rev 9 -by claude ID
 ```
 
 An edit made this way shows in the editor at once, highlighted, and one undo removes it.
+`-own` replaces what that writer last put in, with the user's changes inside it, and
+`-if-rev` refuses the edit if the user has typed since the read. The README describes
+both.
 The link can read and replace text. It has no request that saves or sends.
 
 `Config.Title` and `Config.Meta` are what `slate ls` shows, so give each block a title a

@@ -283,14 +283,27 @@ that off for every editor of the host, and `bubble.Config.Private` for one.
 
 ```
 slate ls                                   # the editors open on this machine
-slate read [ID]                            # an editor's Markdown; -json adds revision and selection
-slate edit -old TEXT -new TEXT [-by NAME] [ID]
+slate read [ID]                            # an editor's Markdown; -json adds revision, selection
+                                           # and the text each writer last put in
+slate edit -old TEXT -new TEXT [-by NAME] [-if-rev N] [ID]
+slate edit -own -new-file draft.md -by NAME [-if-rev N] [ID]
 slate watch [ID]                           # one line per change
 ```
 
 `ID` may be left out while one editor is open. `edit` replaces text that occurs exactly
 once, and without `-old` adds the new text at the end. The edit shows in the editor at
 once, highlighted, and one undo removes it.
+
+- `-new-file` and `-old-file` read the text from a file, or from standard input when
+  given `-`. Use them for Markdown with quotes or backticks, and for text longer than a
+  command line allows.
+- `-own` replaces the text the writer named by `-by` last put in, as it stands now. Text
+  the person typed inside that text goes with it; text typed before or after it stays.
+  `slate read -json` lists each writer's text under `written`, so the writer can see what
+  the person changed before it replaces it.
+- `-if-rev N` refuses the edit unless the document is still at revision `N`, as
+  `read -json` reported it. A writer that reads, then edits with the revision it read,
+  cannot overwrite a change the person made in between.
 
 The link can read and replace text and nothing else. It has no request that saves, sends
 or submits a document, so a comment reaches Jira only when the person presses the host's

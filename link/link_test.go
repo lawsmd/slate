@@ -17,6 +17,7 @@ type fake struct {
 	mu       sync.Mutex
 	text     string
 	rev      uint64
+	last     slate.Edit // the last edit asked for
 	watchers []func(slate.Event)
 }
 
@@ -30,7 +31,12 @@ func (f *fake) Snapshot(context.Context) (slate.Snapshot, error) {
 
 func (f *fake) Edit(_ context.Context, e slate.Edit, origin string) (uint64, error) {
 	f.mu.Lock()
-	if strings.Count(f.text, e.Old) != 1 {
+	f.last = e
+	if e.IfRev != 0 && e.IfRev != f.rev {
+		f.mu.Unlock()
+		return 0, errors.New("the document has changed")
+	}
+	if !e.Own && strings.Count(f.text, e.Old) != 1 {
 		f.mu.Unlock()
 		return 0, errors.New("the text to replace is not in the document")
 	}
@@ -112,7 +118,7 @@ func TestLink(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	rev, err := Edit(reg.ID(), "teh", "the", "claude")
+	rev, err := Edit(reg.ID(), slate.Edit{Old: "teh", New: "the"}, "claude")
 	if err != nil || rev != 1 {
 		t.Fatalf("edit: revision %d, %v", rev, err)
 	}
@@ -127,8 +133,20 @@ func TestLink(t *testing.T) {
 	if err := <-watching; err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Edit(reg.ID(), "absent", "x", "claude"); err == nil || !strings.Contains(err.Error(), "not in the document") {
+	if _, err := Edit(reg.ID(), slate.Edit{Old: "absent", New: "x"}, "claude"); err == nil || !strings.Contains(err.Error(), "not in the document") {
 		t.Fatalf("an edit that cannot apply should carry the editor's reason: %v", err)
+	}
+	if _, err := Edit(reg.ID(), slate.Edit{Old: "the", New: "a", IfRev: 9}, "claude"); err == nil {
+		t.Fatal("an edit at a revision the document has left should fail")
+	}
+	if _, err := Edit(reg.ID(), slate.Edit{Own: true, New: "x", IfRev: 1}, "claude"); err != nil {
+		t.Fatal(err)
+	}
+	doc.mu.Lock()
+	last := doc.last
+	doc.mu.Unlock()
+	if !last.Own || last.IfRev != 1 || last.New != "x" {
+		t.Fatalf("the edit reached the document as %+v", last)
 	}
 	if _, err := Read("nobody-9"); err == nil {
 		t.Fatal("reading an unknown editor should fail")

@@ -636,6 +636,16 @@ type Snapshot struct {
 	Rev      uint64 `json:"rev"`
 	// Selected is the text the user has selected, empty when none is.
 	Selected string `json:"selected,omitempty"`
+	// Written holds, for each writer that has edited the document, the text
+	// its latest edit put in, as it stands now with the user's changes inside
+	// it. A writer whose text has been deleted or undone is left out.
+	Written []Written `json:"written,omitempty"`
+}
+
+// Written is the text one writer's latest edit put in.
+type Written struct {
+	By   string `json:"by"`
+	Text string `json:"text"`
 }
 
 // Snapshot returns the document with its revision and the user's selection,
@@ -674,22 +684,39 @@ type Edit struct {
 	// document. Empty adds New at the end.
 	Old string `json:"old"`
 	New string `json:"new"`
+	// Own replaces the text the writer's latest edit put in, as it stands
+	// now, instead of Old. The writer is the origin given to Edit.
+	Own bool `json:"own,omitempty"`
+	// IfRev, when not 0, refuses the edit unless the document is at that
+	// revision, so that a change made since the writer read it is not lost.
+	IfRev uint64 `json:"ifRev,omitempty"`
 }
 
 // Edit replaces one piece of the document, as another writer than the user
 // would: the change is one undo step, the user's cursor keeps its place in
 // the text around it, and the new text is highlighted for a few seconds.
-// origin names the writer in the Changed event. Edit returns the document's
-// new revision, or an error when Old is absent or occurs more than once.
+// origin names the writer in the Changed event and in Snapshot.Written.
+// Edit returns the document's new revision, or an error when Old is absent
+// or occurs more than once, when Own is set and the writer has no text, or
+// when the document is not at IfRev.
 func (e *Editor) Edit(ctx context.Context, edit Edit, origin string) (uint64, error) {
 	return ask(ctx, e, func(pg *page) (uint64, error) {
+		e.mu.Lock()
+		base := e.revBase
+		e.mu.Unlock()
+		// The page counts revisions from when it loaded.
+		arg := map[string]any{"old": edit.Old, "new": edit.New, "own": edit.Own}
+		if edit.IfRev != 0 {
+			if edit.IfRev < base {
+				return 0, fmt.Errorf("the document has changed since revision %d; read it again", edit.IfRev)
+			}
+			arg["ifRev"] = edit.IfRev - base
+		}
 		var rev uint64
-		if err := e.eval(pg, &rev, "slate.edit", edit, origin); err != nil {
+		if err := e.eval(pg, &rev, "slate.edit", arg, origin); err != nil {
 			return 0, err
 		}
-		e.mu.Lock()
-		defer e.mu.Unlock()
-		return e.revBase + rev, nil
+		return base + rev, nil
 	})
 }
 

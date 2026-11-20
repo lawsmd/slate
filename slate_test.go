@@ -282,6 +282,86 @@ func TestEdit(t *testing.T) {
 	}
 }
 
+func TestEditByWriter(t *testing.T) {
+	browserTest(t)
+	ed, err := New(Options{Markdown: "Hi @x\n", Cols: 40, Rows: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ed.Close()
+	ctx := context.Background()
+	written := func(s Snapshot) map[string]string {
+		m := map[string]string{}
+		for _, w := range s.Written {
+			m[w.By] = w.Text
+		}
+		return m
+	}
+
+	if _, err := ed.Edit(ctx, Edit{Own: true, New: "x"}, "handoff"); err == nil {
+		t.Fatal("an own edit before the writer has written should fail")
+	}
+	if _, err := ed.Edit(ctx, Edit{New: "draft one\n"}, "handoff"); err != nil {
+		t.Fatal(err)
+	}
+	// The user types before the draft and after it, and another writer
+	// changes a word inside it.
+	ed.Key(Key{Name: "Z"})
+	ed.Key(Key{Name: "End", Mod: Ctrl})
+	ed.Key(Key{Name: "!"})
+	if _, err := ed.Edit(ctx, Edit{Old: "one", New: "ONE"}, "other"); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := ed.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Markdown != "ZHi @x\ndraft ONE\n!" {
+		t.Fatalf("document: %q", snap.Markdown)
+	}
+	if w := written(snap); w["handoff"] != "draft ONE\n" || w["other"] != "ONE" || len(w) != 2 {
+		t.Fatalf("written: %+v", snap.Written)
+	}
+
+	// A change after the read makes an edit at that revision fail.
+	ed.Key(Key{Name: "?"})
+	if _, err := ed.Edit(ctx, Edit{Own: true, New: "draft two\n", IfRev: snap.Rev}, "handoff"); err == nil {
+		t.Fatal("an edit at an old revision should fail")
+	}
+	if snap, err = ed.Snapshot(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if snap.Markdown != "ZHi @x\ndraft ONE\n!?" {
+		t.Fatalf("a refused edit changed the document: %q", snap.Markdown)
+	}
+	if _, err := ed.Edit(ctx, Edit{Own: true, New: "draft two\n", IfRev: snap.Rev}, "handoff"); err != nil {
+		t.Fatal(err)
+	}
+	if snap, err = ed.Snapshot(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if snap.Markdown != "ZHi @x\ndraft two\n!?" {
+		t.Fatalf("after replacing the writer's text: %q", snap.Markdown)
+	}
+	if w := written(snap); w["handoff"] != "draft two\n" || len(w) != 1 {
+		t.Fatalf("written after the replacement: %+v", snap.Written)
+	}
+
+	// Undoing the replacement leaves the writer with the text it put back.
+	ed.Key(Key{Name: "z", Mod: Ctrl})
+	if snap, _ = ed.Snapshot(ctx); written(snap)["handoff"] != "draft ONE\n" {
+		t.Fatalf("written after undo: %+v (%q)", snap.Written, snap.Markdown)
+	}
+
+	// Deleting all of a writer's text leaves it with none.
+	if _, err := ed.Edit(ctx, Edit{Old: "draft ONE\n", New: ""}, "other"); err != nil {
+		t.Fatal(err)
+	}
+	if snap, _ = ed.Snapshot(ctx); len(snap.Written) != 0 {
+		t.Fatalf("written after deleting the text: %+v (%q)", snap.Written, snap.Markdown)
+	}
+}
+
 func TestEditorsShareABrowserAndRestart(t *testing.T) {
 	browserTest(t)
 	start := time.Now()

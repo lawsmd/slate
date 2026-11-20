@@ -10,12 +10,18 @@
 //	{"op":"list"}
 //	{"op":"read","id":"4242-1"}
 //	{"op":"edit","id":"4242-1","old":"teh","new":"the","by":"claude"}
+//	{"op":"edit","id":"4242-1","own":true,"new":"draft 2","by":"claude","if_rev":7}
 //	{"op":"watch","id":"4242-1"}
 //
 // The protocol can read and replace text and nothing else. It has no request
 // that saves, sends or submits: what happens to the document stays with the
 // person at the host's keyboard. An edit shows in the editor at once,
 // highlighted, and one undo removes it.
+//
+// An edit with "own" replaces the text that writer's latest edit put in, as
+// it stands now, so a writer can revise its draft after the person has
+// changed it. An edit with "if_rev" is refused unless the document is still
+// at that revision. A read returns the revision and each writer's text.
 package link
 
 import (
@@ -209,9 +215,11 @@ func publish() error {
 type request struct {
 	Op  string `json:"op"`
 	ID  string `json:"id,omitempty"`
-	Old string `json:"old,omitempty"`
-	New string `json:"new,omitempty"`
-	By  string `json:"by,omitempty"`
+	Old   string `json:"old,omitempty"`
+	New   string `json:"new,omitempty"`
+	By    string `json:"by,omitempty"`
+	Own   bool   `json:"own,omitempty"`
+	IfRev uint64 `json:"if_rev,omitempty"`
 }
 
 // Change is one change of a document, as watch reports it.
@@ -281,7 +289,7 @@ func handle(conn net.Conn) {
 		if by == "" {
 			by = "link"
 		}
-		rev, err := r.doc.Edit(ctx, slate.Edit{Old: req.Old, New: req.New}, by)
+		rev, err := r.doc.Edit(ctx, slate.Edit{Old: req.Old, New: req.New, Own: req.Own, IfRev: req.IfRev}, by)
 		if err != nil {
 			out.Encode(response{Error: err.Error()})
 			return
@@ -419,8 +427,8 @@ func call(address string, req request, each func(response) bool) (response, erro
 	}
 }
 
-// Read returns the document of the editor with that ID, its revision and
-// the text the user has selected.
+// Read returns the document of the editor with that ID, its revision, the
+// text the user has selected and each writer's text.
 func Read(id string) (slate.Snapshot, error) {
 	e, err := Find(id)
 	if err != nil {
@@ -436,15 +444,16 @@ func Read(id string) (slate.Snapshot, error) {
 	return *resp.Doc, nil
 }
 
-// Edit replaces old, which must occur exactly once in the document, with
-// new, and returns the new revision. An empty old adds new at the end. by
-// names the writer to the host.
-func Edit(id, old, new, by string) (uint64, error) {
+// Edit makes one edit, as slate.Edit describes, in the editor with that ID
+// and returns the new revision. by names the writer to the host.
+func Edit(id string, edit slate.Edit, by string) (uint64, error) {
 	e, err := Find(id)
 	if err != nil {
 		return 0, err
 	}
-	resp, err := call(e.address, request{Op: "edit", ID: e.ID, Old: old, New: new, By: by}, nil)
+	resp, err := call(e.address, request{
+		Op: "edit", ID: e.ID, Old: edit.Old, New: edit.New, By: by, Own: edit.Own, IfRev: edit.IfRev,
+	}, nil)
 	return resp.Rev, err
 }
 

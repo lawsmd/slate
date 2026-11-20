@@ -5,11 +5,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
 	"text/tabwriter"
 
+	"github.com/lawsmd/slate"
 	"github.com/lawsmd/slate/link"
 )
 
@@ -53,7 +55,7 @@ func list(args []string) error {
 
 func read(args []string) error {
 	fs := flag.NewFlagSet("read", flag.ExitOnError)
-	asJSON := fs.Bool("json", false, "print the Markdown with its revision and the selected text, as JSON")
+	asJSON := fs.Bool("json", false, "print the Markdown with its revision, the selected text and each writer's text, as JSON")
 	fs.Parse(args)
 	doc, err := link.Read(fs.Arg(0))
 	if err != nil {
@@ -68,19 +70,52 @@ func read(args []string) error {
 
 func edit(args []string) error {
 	fs := flag.NewFlagSet("edit", flag.ExitOnError)
-	old := fs.String("old", "", "the text to replace; it must occur exactly once. Empty adds -new at the end")
+	old := fs.String("old", "", "the text to replace; it must occur exactly once. Empty adds the new text at the end")
+	oldFile := fs.String("old-file", "", "read the text to replace from this file; - reads standard input")
 	replacement := fs.String("new", "", "the text to put in its place")
+	newFile := fs.String("new-file", "", "read the text to put in its place from this file; - reads standard input")
+	own := fs.Bool("own", false, "replace the text the writer named by -by last put in, as it stands now, instead of -old")
+	ifRev := fs.Uint64("if-rev", 0, "refuse the edit unless the document is at this revision, as read -json reports it")
 	by := fs.String("by", "agent", "who is writing, as the host is told")
 	fs.Parse(args)
-	if *old == "" && *replacement == "" {
-		return errors.New("edit needs -old, -new or both, before the editor's ID")
+	var err error
+	if *old, err = textFlag("old", *old, *oldFile); err != nil {
+		return err
 	}
-	rev, err := link.Edit(fs.Arg(0), *old, *replacement, *by)
+	if *replacement, err = textFlag("new", *replacement, *newFile); err != nil {
+		return err
+	}
+	if *own && *old != "" {
+		return errors.New("edit takes -own or -old, not both")
+	}
+	if *old == "" && *replacement == "" && !*own {
+		return errors.New("edit needs -old, -new, -own or a -file form of them, before the editor's ID")
+	}
+	rev, err := link.Edit(fs.Arg(0), slate.Edit{Old: *old, New: *replacement, Own: *own, IfRev: *ifRev}, *by)
 	if err != nil {
 		return err
 	}
 	fmt.Println("revision", rev)
 	return nil
+}
+
+// textFlag returns the text of a flag given either inline or as a file,
+// where the file - is standard input.
+func textFlag(name, inline, file string) (string, error) {
+	if file == "" {
+		return inline, nil
+	}
+	if inline != "" {
+		return "", fmt.Errorf("edit takes -%s or -%s-file, not both", name, name)
+	}
+	var data []byte
+	var err error
+	if file == "-" {
+		data, err = io.ReadAll(os.Stdin)
+	} else {
+		data, err = os.ReadFile(file)
+	}
+	return string(data), err
 }
 
 func watch(args []string) error {

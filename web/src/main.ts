@@ -10,7 +10,7 @@ import { toDoc } from "./doc";
 import { defaultTarget, parse, target, type Exported, type Target } from "./targets";
 import { defaultRender, renderCompartment, renderConfig, trackFocus, type RenderConfig } from "./config";
 import { blink, setSteady } from "./blink";
-import { applyEdit, editMarks, origin, type Edit } from "./edits";
+import { applyEdit, editMarks, origin, written, writtenText, type Edit } from "./edits";
 import { notifyHost, resolveHost } from "./host";
 import { openLanguagePicker } from "./langpicker";
 import { liveField } from "./live";
@@ -140,6 +140,7 @@ const view = new EditorView({
       autocompletion({ override: [mentionSource], icons: false }),
       keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
       editMarks,
+      written,
       EditorView.updateListener.of((update) => {
         if (!update.docChanged) return;
         revision++;
@@ -185,15 +186,15 @@ const api = {
 
   /** Replaces one exact piece of text and returns the new revision. */
   edit(edit: Edit, by: string): number {
-    applyEdit(view, edit, by || "host");
+    applyEdit(view, edit, by || "host", revision);
     return revision;
   },
 
-  /** The document with its revision and the text the user has selected. */
+  /** The document with its revision, the text the user has selected and each writer's text. */
   read() {
     const { state } = view;
     const selected = state.selection.ranges.map((r) => state.sliceDoc(r.from, r.to)).join("\n");
-    return { markdown: state.doc.toString(), rev: revision, selected };
+    return { markdown: state.doc.toString(), rev: revision, selected, written: writtenText(view) };
   },
 
   /** The document in a target's form: the current target's, or the named one's. */

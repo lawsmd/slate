@@ -14,10 +14,17 @@ const usage = `usage:
 
 for the editors open in any program on this machine:
   slate ls [-json]             list them
-  slate read [-json] [ID]      print an editor's Markdown
-  slate edit -old TEXT -new TEXT [-by NAME] [ID]
+  slate read [-json] [ID]      print an editor's Markdown; -json adds the
+                               revision and the text each writer last put in
+  slate edit -old TEXT -new TEXT [-by NAME] [-if-rev N] [ID]
                                replace TEXT, which must occur exactly once;
                                without -old, add the new text at the end
+  slate edit -own -new TEXT -by NAME [-if-rev N] [ID]
+                               replace the text NAME's last edit put in, with
+                               any changes made inside it since
+                               -old-file and -new-file take the text from a
+                               file, or from standard input for -; -if-rev
+                               refuses the edit if the document has changed
   slate watch [ID]             print a line for each change until the editor closes
 
 ID may be left out while one editor is open. An edit shows in the editor at
