@@ -3,8 +3,12 @@
 // Herdr redraws its panes cell by cell and passes no Sixel images to the
 // terminal it runs in. This package goes around it. A helper process attaches
 // to the console of Herdr's client, which is the real terminal, and writes
-// the image there. Herdr's socket API says where the pane sits in that
-// terminal and whether it is showing.
+// the image there. Herdr's socket API says where the pane sits in its pane
+// area and whether it is showing. Herdr 0.9 counts that place from the top
+// left of the pane area, which leaves out the sidebar and the tab bar, and no
+// call reports where the area starts. The area fills the bottom right of the
+// terminal, so the helper reads the terminal's size and the host adds the
+// difference.
 //
 // Herdr does not know the image exists. It rewrites only the cells whose text
 // changes, so parts of an image stay behind in cells that are blank before
@@ -27,13 +31,16 @@ import (
 	"time"
 )
 
+// sizeWait is how long Open waits for the helper to report the terminal's size.
+const sizeWait = 2 * time.Second
+
 // Inside reports whether this process runs in a Herdr pane.
 func Inside() bool { return os.Getenv("HERDR_ENV") != "" && os.Getenv("HERDR_PANE_ID") != "" }
 
 // State is where the pane is and whether it can be drawn on.
 type State struct {
 	X, Y, W, H int  // the pane's cells in the outer terminal, counted from 0
-	Visible    bool // the pane's tab is showing and no zoomed pane covers it
+	Visible    bool // the pane's tab is showing, no zoomed pane covers it, and its place is known
 	Focused    bool // the pane has Herdr's focus
 }
 
@@ -45,10 +52,11 @@ type Pane struct {
 	wiped  chan struct{}
 	stop   func()
 
-	mu      sync.Mutex
-	state   State
-	changes chan struct{}
-	done    chan struct{}
+	mu         sync.Mutex
+	state      State
+	cols, rows int // the outer terminal's size in cells, 0 until the helper reports it
+	changes    chan struct{}
+	done       chan struct{}
 }
 
 // Open finds the pane this process runs in and starts the helper that writes
@@ -64,28 +72,30 @@ func Open() (*Pane, error) {
 		wiped:   make(chan struct{}, 1),
 		done:    make(chan struct{}),
 	}
-	st, err := p.query()
+	if _, err := p.query(); err != nil {
+		return nil, err
+	}
+	out, reports, stop, err := startHelper(p.socket)
 	if err != nil {
 		return nil, err
 	}
-	p.state = st
-	var reports io.Reader
-	if p.out, reports, p.stop, err = startHelper(p.socket); err != nil {
+	p.out, p.stop = out, stop
+	sized := make(chan struct{})
+	go p.read(reports, sized)
+	select {
+	case <-sized:
+	case <-time.After(sizeWait):
+		p.Close()
+		return nil, errors.New("the helper did not report the terminal's size")
+	}
+	st, err := p.query()
+	if err != nil {
+		p.Close()
 		return nil, err
 	}
-	go func() {
-		// The helper writes one byte each time it finds the image wiped.
-		var b [1]byte
-		for {
-			if _, err := reports.Read(b[:]); err != nil {
-				return
-			}
-			select {
-			case p.wiped <- struct{}{}:
-			default:
-			}
-		}
-	}()
+	p.mu.Lock()
+	p.state = st
+	p.mu.Unlock()
 	go p.watch()
 	go p.poll()
 	return p, nil
@@ -185,6 +195,40 @@ func (p *Pane) send(kind byte, payload []byte) error {
 	return err
 }
 
+// read carries out the helper's reports until it exits: 'w' when it finds the
+// image wiped, or 's' and the terminal's columns and rows as two
+// little-endian uint16s. sized is closed at the first size.
+func (p *Pane) read(reports io.Reader, sized chan struct{}) {
+	r := bufio.NewReader(reports)
+	for {
+		kind, err := r.ReadByte()
+		if err != nil {
+			return
+		}
+		switch kind {
+		case 'w':
+			select {
+			case p.wiped <- struct{}{}:
+			default:
+			}
+		case 's':
+			var b [4]byte
+			if _, err := io.ReadFull(r, b[:]); err != nil {
+				return
+			}
+			p.mu.Lock()
+			p.cols, p.rows = int(b[0])|int(b[1])<<8, int(b[2])|int(b[3])<<8
+			p.mu.Unlock()
+			if sized != nil {
+				close(sized)
+				sized = nil
+			} else {
+				p.refresh()
+			}
+		}
+	}
+}
+
 func (p *Pane) refresh() {
 	st, err := p.query()
 	if err != nil {
@@ -268,7 +312,6 @@ func (p *Pane) query() (State, error) {
 	if _, err := io.WriteString(conn, `{"id":"slate","method":"session.snapshot","params":{}}`+"\n"); err != nil {
 		return State{}, err
 	}
-	type rect struct{ X, Y, Width, Height int }
 	var reply struct {
 		Error  *struct{ Message string }
 		Result struct {
@@ -301,23 +344,48 @@ func (p *Pane) query() (State, error) {
 	if reply.Error != nil {
 		return State{}, errors.New("herdr: " + reply.Error.Message)
 	}
+	p.mu.Lock()
+	cols, rows := p.cols, p.rows
+	p.mu.Unlock()
 	snap := reply.Result.Snapshot
 	for _, l := range snap.Layouts {
 		for _, pane := range l.Panes {
 			if pane.PaneID != p.id {
 				continue
 			}
-			st := State{X: pane.Rect.X, Y: pane.Rect.Y, W: pane.Rect.Width, H: pane.Rect.Height}
+			r := pane.Rect
+			st := State{}
 			st.Visible = l.WorkspaceID == snap.FocusedWorkspace && l.TabID == snap.FocusedTab
 			if l.Zoomed {
 				// A zoomed pane fills the tab and hides the others.
 				st.Visible = st.Visible && l.FocusedPane == p.id
-				st.X, st.Y, st.W, st.H = l.Area.X, l.Area.Y, l.Area.Width, l.Area.Height
+				r = l.Area
 			}
+			var ok bool
+			st.X, st.Y, ok = place(cols, rows, l.Area, r)
+			st.W, st.H = r.Width, r.Height
+			st.Visible = st.Visible && ok
 			st.Focused = st.Visible && snap.FocusedPane == p.id
 			return st, nil
 		}
 	}
 	// The pane is in no layout, as when its tab is not laid out yet.
 	return State{}, nil
+}
+
+// rect is a rectangle of cells as Herdr's API reports it.
+type rect struct{ X, Y, Width, Height int }
+
+// place returns where r, a rectangle in the pane area, sits in a terminal of
+// cols by rows cells. The pane area fills the bottom right of the terminal:
+// the sidebar is to its left and the tab bar above it. Herdr 0.9 counts area
+// and r from the area's top left, so area is at 0,0; Herdr 0.8 counted them
+// from the terminal's, and then the origin comes out 0,0. ok is false when the
+// size is not known yet or does not fit, as in the middle of a resize.
+func place(cols, rows int, area, r rect) (x, y int, ok bool) {
+	ox, oy := cols-area.Width-area.X, rows-area.Height-area.Y
+	if cols < 1 || rows < 1 || ox < 0 || oy < 0 {
+		return 0, 0, false
+	}
+	return r.X + ox, r.Y + oy, true
 }

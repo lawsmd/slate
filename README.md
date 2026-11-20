@@ -125,15 +125,19 @@ the new text is highlighted for four seconds.
 
 ## Herdr
 
-Herdr 0.8.2 passes Kitty graphics to the outer terminal and no Sixel. Windows Terminal
-shows Sixel and no Kitty graphics. A slate block in a Herdr pane on Windows Terminal is
-therefore drawn around Herdr:
+Herdr passes no Sixel to the outer terminal; 0.8.2 passed Kitty graphics. Windows Terminal shows Sixel and no Kitty graphics. A slate block in a Herdr
+pane on Windows Terminal is therefore drawn around Herdr. This was tested on Herdr 0.8.2
+and 0.9.5:
 
 1. A helper process attaches to the console of Herdr's client (`AttachConsole`), which is
    the Windows Terminal tab itself, and writes the Sixel there.
 2. Herdr's socket API (`session.snapshot` and `events.subscribe` on the named pipe at
-   `HERDR_SOCKET_PATH`) gives the pane's cells in that terminal and says whether the
-   pane's tab is showing.
+   `HERDR_SOCKET_PATH`) gives the pane's cells in Herdr's pane area and says whether the
+   pane's tab is showing. Herdr 0.9.5 counts those cells from the top left of the pane
+   area, which leaves out the sidebar and the tab bar, and reports nowhere where the area
+   starts. The helper reads the console's size and reports it to the host. slate takes the
+   pane area to fill the bottom right of the terminal, with the sidebar to its left and the
+   tab bar above, and adds the difference in size to the pane's cells.
 3. Herdr rewrites only cells whose text changes, so pieces of the image stay in cells that
    are blank before and after a tab switch, a split or the editor's exit. slate reads the
    console's cells and writes a space over each blank one in the old rectangle.
@@ -197,8 +201,11 @@ Limits found so far:
   5 ms to write the image. Acting on the first look could put a write inside Herdr's
   output. Herdr wraps each frame in a synchronized update (`CSI ?2026`), which it ends
   itself, so slate cannot hold the terminal's painting across the gap.
-- Herdr reports the cell size (`pane.graphics.info`) only with
-  `experimental.kitty_graphics` turned on. slate uses the answer when it gets one.
+- Herdr 0.8.2 reports the cell size (`pane.graphics.info`) only with
+  `experimental.kitty_graphics` turned on. slate uses the answer when it gets one. Herdr
+  0.9.5 has no `pane.graphics.info`, so there slate always uses 10 by 20 pixels.
+- A Herdr layout with the sidebar on the right, or a bar below the pane area, would put
+  the image in the wrong place.
 - If Herdr repaints while a popup covers part of the block, the rest of the block stays
   empty until the popup closes.
 - slate and Herdr write to the same console without coordination. A write from slate that

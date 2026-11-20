@@ -154,6 +154,7 @@ const (
 
 	lookEvery   = 4 * time.Millisecond
 	reportEvery = 500 * time.Millisecond
+	sizeEvery   = 50 * time.Millisecond
 
 	// With redraw_on_focus_gained on, which is its default, Herdr repaints
 	// the pane 50 to 60 ms after its window comes to the front. For hotFor
@@ -251,18 +252,40 @@ func terminalWindow() uintptr {
 	return root
 }
 
+// size returns the console window's size in cells, or 0, 0.
+func (c *console) size() (cols, rows int) {
+	var info windows.ConsoleScreenBufferInfo
+	if windows.GetConsoleScreenBufferInfo(c.out, &info) != nil {
+		return 0, 0
+	}
+	return int(info.Window.Right-info.Window.Left) + 1, int(info.Window.Bottom-info.Window.Top) + 1
+}
+
 // watch looks at the marked cells until the process ends and tells the host
 // of each wipe. It looks more often just after the terminal's window comes
-// to the front.
+// to the front. It also tells the host the console's size, at the start and
+// after each change. watch is the only writer to standard output: 'w' for a
+// wipe, or 's' and the columns and rows as two little-endian uint16s.
 func (c *console) watch() {
 	window := terminalWindow()
 	c.mu.Lock()
 	c.note("terminal window %#x", window)
 	c.mu.Unlock()
 	var front bool
-	var hotUntil time.Time
+	var hotUntil, sized time.Time
+	var cols, rows int
 	for {
 		now := time.Now()
+		if now.Sub(sized) >= sizeEvery {
+			sized = now
+			if w, h := c.size(); w > 0 && h > 0 && (w != cols || h != rows) {
+				cols, rows = w, h
+				c.mu.Lock()
+				c.note("console %dx%d", cols, rows)
+				c.mu.Unlock()
+				os.Stdout.Write([]byte{'s', byte(cols), byte(cols >> 8), byte(rows), byte(rows >> 8)})
+			}
+		}
 		if window != 0 {
 			fg, _, _ := getForegroundWindow.Call()
 			if fg == window && !front {
