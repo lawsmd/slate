@@ -131,3 +131,37 @@ func TestAHostsOwnErrorIsNotForced(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 }
+
+// outside stands for a painter that writes to another screen than the one
+// the host's terminal answers for.
+type outside struct{ stdout }
+
+func (outside) Detached() bool             { return true }
+func (outside) CellSize() (int, int, bool) { return 10, 20, true }
+
+func TestCellSizeComesFromWhereTheImageIsDrawn(t *testing.T) {
+	t.Setenv("SLATE_CELL", "")
+	plain, detached := &Model{paint: stdout{}}, &Model{paint: outside{}}
+	if !plain.asksTerminal() {
+		t.Error("the default painter does not ask the terminal")
+	}
+	if msg := plain.cellSize()(); msg != nil {
+		t.Errorf("the default painter reported %v", msg)
+	}
+	if detached.asksTerminal() {
+		t.Error("a detached painter takes the answer of the host's terminal")
+	}
+	if msg := detached.cellSize()(); msg != (cellMsg{10, 20}) {
+		t.Errorf("a detached painter reported %v", msg)
+	}
+
+	t.Setenv("SLATE_CELL", "9x18")
+	for _, m := range []*Model{plain, detached} {
+		if m.asksTerminal() {
+			t.Error("SLATE_CELL is set and the terminal is still asked")
+		}
+		if msg := m.cellSize()(); msg != (cellMsg{9, 18}) {
+			t.Errorf("with SLATE_CELL=9x18: %v", msg)
+		}
+	}
+}

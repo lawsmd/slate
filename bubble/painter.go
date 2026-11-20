@@ -40,8 +40,9 @@ type Painter interface {
 	// Wiped signals that something else removed the image and a Placed
 	// draw is needed. It is nil for a painter that cannot tell.
 	Wiped() <-chan struct{}
-	// CellSize returns the pixel size of one cell, if the painter knows it
-	// better than the terminal's answer to CSI 16 t.
+	// CellSize returns the pixel size of one cell where the painter writes,
+	// if the painter knows it. A detached painter's answer is the only one
+	// used: the host's own terminal answers CSI 16 t for another screen.
 	CellSize() (w, h int, ok bool)
 	// Detached reports whether the image is written outside Bubble Tea's
 	// output. Bubble Tea then neither orders its frames with the image nor

@@ -16,6 +16,8 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -202,6 +204,9 @@ func New(opts Options) (*Editor, error) {
 	}
 	if e.cellW <= 0 || e.cellH <= 0 {
 		e.cellW, e.cellH = 10, 20
+		if w, h, ok := EnvCellSize(); ok {
+			e.cellW, e.cellH = w, h
+		}
 	}
 
 	br, err := acquire(opts.BrowserPath)
@@ -793,4 +798,21 @@ func (e *Editor) Close() error {
 		err = release()
 	})
 	return err
+}
+
+// EnvCellSize returns the cell size that the environment variable SLATE_CELL
+// names, as "10x20": the pixels of one terminal cell, for a terminal or
+// multiplexer that does not report them. ok is false when the variable is
+// unset or is not two positive numbers.
+func EnvCellSize() (w, h int, ok bool) {
+	a, b, found := strings.Cut(os.Getenv("SLATE_CELL"), "x")
+	if !found {
+		return 0, 0, false
+	}
+	w, errW := strconv.Atoi(a)
+	h, errH := strconv.Atoi(b)
+	if errW != nil || errH != nil || w < 1 || h < 1 {
+		return 0, 0, false
+	}
+	return w, h, true
 }

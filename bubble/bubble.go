@@ -123,7 +123,10 @@ func (m *Model) Close() {
 
 // Init starts listening for frames and asks the terminal for its cell size.
 func (m *Model) Init() tea.Cmd {
-	cmds := []tea.Cmd{tea.Raw(requestCellSize), m.cellSize(), m.wait(), m.Redraw()}
+	cmds := []tea.Cmd{m.cellSize(), m.wait(), m.Redraw()}
+	if m.asksTerminal() {
+		cmds = append(cmds, tea.Raw(requestCellSize))
+	}
 	if m.paint.Changes() != nil {
 		cmds = append(cmds, m.waitOuter())
 	}
@@ -139,15 +142,36 @@ func (m *Model) Init() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// cellSize asks the painter for the cell size. The answer arrives as the
-// event a terminal's own answer makes.
+// cellMsg is a cell size from SLATE_CELL or from the painter.
+type cellMsg struct{ w, h int }
+
+// cellSize reports the cell size that SLATE_CELL names, or else the one the
+// painter knows.
 func (m *Model) cellSize() tea.Cmd {
 	return func() tea.Msg {
+		if w, h, ok := slate.EnvCellSize(); ok {
+			return cellMsg{w, h}
+		}
 		if w, h, ok := m.paint.CellSize(); ok {
-			return uv.CellSizeEvent{Width: w, Height: h}
+			return cellMsg{w, h}
 		}
 		return nil
 	}
+}
+
+// asksTerminal reports whether the answer to CSI 16 t is the size of the
+// cells the image is drawn on. A detached painter writes to another screen
+// than the one that answers, and SLATE_CELL settles the size by itself.
+func (m *Model) asksTerminal() bool {
+	_, _, fixed := slate.EnvCellSize()
+	return !fixed && !m.paint.Detached()
+}
+
+func (m *Model) setCell(w, h int) tea.Cmd {
+	m.ed.SetCellSize(w, h)
+	// Text is sized to the cell so that it tracks the terminal's zoom.
+	m.ed.SetTheme(slate.Theme{FontSize: h * 3 / 4})
+	return m.Redraw()
 }
 
 func (m *Model) waitOuter() tea.Cmd {
@@ -314,18 +338,21 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		if m.painted != nil {
 			return m.draw(Whole)
 		}
+	case cellMsg:
+		return m.setCell(msg.w, msg.h)
 	case uv.CellSizeEvent:
-		m.ed.SetCellSize(msg.Width, msg.Height)
-		// Text is sized to the cell so that it tracks the terminal's zoom.
-		m.ed.SetTheme(slate.Theme{FontSize: msg.Height * 3 / 4})
-		return m.Redraw()
+		if m.asksTerminal() {
+			return m.setCell(msg.Width, msg.Height)
+		}
 	case tea.WindowSizeMsg:
 		m.winW, m.winH = msg.Width, msg.Height
 		if m.paint.Detached() {
 			return m.moved()
 		}
 		// A zoom changes the cell size and reports as a resize.
-		return tea.Raw(requestCellSize)
+		if m.asksTerminal() {
+			return tea.Raw(requestCellSize)
+		}
 	case tea.PasteMsg:
 		m.ed.Paste(msg.Content)
 	case tea.KeyPressMsg:

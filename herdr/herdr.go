@@ -4,7 +4,7 @@
 // terminal it runs in. This package goes around it. A helper process attaches
 // to the console of Herdr's client, which is the real terminal, and writes
 // the image there. Herdr's socket API says where the pane sits in its pane
-// area and whether it is showing. Herdr 0.9 counts that place from the top
+// area and whether it is showing. Herdr counts that place from the top
 // left of the pane area, which leaves out the sidebar and the tab bar, and no
 // call reports where the area starts. The area fills the bottom right of the
 // terminal, so the helper reads the terminal's size and the host adds the
@@ -134,33 +134,12 @@ func (p *Pane) Draw(x, y, w, h int, seq []byte) error {
 // after a wipe, so call it when the block has changed since the last Draw.
 func (p *Pane) Refresh(seq []byte) error { return p.send('K', seq) }
 
-// CellSize returns the pixel size of one cell of the outer terminal, as
-// Herdr knows it. Herdr reports it only with experimental.kitty_graphics
-// turned on in its configuration.
-func (p *Pane) CellSize() (w, h int, ok bool) {
-	conn, err := dial(p.socket)
-	if err != nil {
-		return 0, 0, false
-	}
-	defer conn.Close()
-	req, _ := json.Marshal(map[string]any{
-		"id": "slate", "method": "pane.graphics.info", "params": map[string]string{"pane_id": p.id},
-	})
-	if _, err := conn.Write(append(req, '\n')); err != nil {
-		return 0, 0, false
-	}
-	var reply struct {
-		Result struct {
-			W int `json:"cell_width_px"`
-			H int `json:"cell_height_px"`
-		}
-	}
-	line, _ := bufio.NewReader(conn).ReadBytes('\n')
-	if json.Unmarshal(line, &reply) != nil {
-		return 0, 0, false
-	}
-	return reply.Result.W, reply.Result.H, reply.Result.W > 0 && reply.Result.H > 0
-}
+// CellSize returns the pixel size of one cell of the outer terminal, for a
+// Sixel image. The helper writes to a Windows console, and Windows Terminal,
+// the terminal there that shows Sixel, draws an image on cells of 10 by 20
+// pixels at every font size. Herdr has no call that reports a cell's size,
+// and what a pane answers to CSI 16 t is not the size Sixel is drawn at.
+func (p *Pane) CellSize() (w, h int, ok bool) { return 10, 20, true }
 
 // Wiped signals that Herdr repainted the cells given to Draw and the image
 // is gone from them. The host answers with another Draw.
@@ -282,17 +261,7 @@ func (p *Pane) subscribe() {
 		<-p.done
 		conn.Close()
 	}()
-	var subs []map[string]string
-	for _, t := range []string{
-		"layout.updated", "tab.focused", "tab.closed", "tab.moved", "pane.focused", "pane.moved",
-		"pane.closed", "pane.created", "workspace.focused", "workspace.closed",
-	} {
-		subs = append(subs, map[string]string{"type": t})
-	}
-	req, _ := json.Marshal(map[string]any{
-		"id": "slate", "method": "events.subscribe", "params": map[string]any{"subscriptions": subs},
-	})
-	if _, err := conn.Write(append(req, '\n')); err != nil {
+	if _, err := conn.Write(subscription()); err != nil {
 		return
 	}
 	lines := bufio.NewScanner(conn)
@@ -300,6 +269,24 @@ func (p *Pane) subscribe() {
 	for lines.Scan() {
 		p.refresh()
 	}
+}
+
+// events are the events after which the pane's place or showing may differ.
+var events = []string{
+	"layout.updated", "tab.focused", "tab.closed", "tab.moved", "pane.focused", "pane.moved",
+	"pane.closed", "pane.created", "workspace.focused", "workspace.closed",
+}
+
+// subscription is the request line that subscribes to events.
+func subscription() []byte {
+	var subs []map[string]string
+	for _, t := range events {
+		subs = append(subs, map[string]string{"type": t})
+	}
+	req, _ := json.Marshal(map[string]any{
+		"id": "slate", "method": "events.subscribe", "params": map[string]any{"subscriptions": subs},
+	})
+	return append(req, '\n')
 }
 
 // query asks Herdr for a snapshot and finds this pane in it.
@@ -378,10 +365,11 @@ type rect struct{ X, Y, Width, Height int }
 
 // place returns where r, a rectangle in the pane area, sits in a terminal of
 // cols by rows cells. The pane area fills the bottom right of the terminal:
-// the sidebar is to its left and the tab bar above it. Herdr 0.9 counts area
-// and r from the area's top left, so area is at 0,0; Herdr 0.8 counted them
-// from the terminal's, and then the origin comes out 0,0. ok is false when the
-// size is not known yet or does not fit, as in the middle of a resize.
+// the sidebar is to its left and the tab bar above it. Herdr counts area and r
+// from the area's top left, so area is at 0,0. An area counted from the
+// terminal's top left, as older versions reported it, gives the same answer.
+// ok is false when the size is not known yet or does not fit, as in the middle
+// of a resize.
 func place(cols, rows int, area, r rect) (x, y int, ok bool) {
 	ox, oy := cols-area.Width-area.X, rows-area.Height-area.Y
 	if cols < 1 || rows < 1 || ox < 0 || oy < 0 {

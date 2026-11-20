@@ -125,16 +125,18 @@ the new text is highlighted for four seconds.
 
 ## Herdr
 
-Herdr passes no Sixel to the outer terminal; 0.8.2 passed Kitty graphics. Windows Terminal shows Sixel and no Kitty graphics. A slate block in a Herdr
-pane on Windows Terminal is therefore drawn around Herdr. This was tested on Herdr 0.8.2
-and 0.9.5:
+Herdr shows an image that a pane writes as Kitty graphics, and passes no Sixel to the
+outer terminal. Windows Terminal shows Sixel and no Kitty graphics. A slate block in a
+Herdr pane on Windows Terminal is therefore drawn around Herdr. slate follows the latest
+Herdr and was last tested on Herdr 0.9.5. After updating Herdr, run `go test ./herdr` in a
+Herdr pane: it fails when Herdr no longer has a call, an event or a field slate uses.
 
 1. A helper process attaches to the console of Herdr's client (`AttachConsole`), which is
    the Windows Terminal tab itself, and writes the Sixel there.
 2. Herdr's socket API (`session.snapshot` and `events.subscribe` on the named pipe at
    `HERDR_SOCKET_PATH`) gives the pane's cells in Herdr's pane area and says whether the
-   pane's tab is showing. Herdr 0.9.5 counts those cells from the top left of the pane
-   area, which leaves out the sidebar and the tab bar, and reports nowhere where the area
+   pane's tab is showing. Herdr counts those cells from the top left of the pane area,
+   which leaves out the sidebar and the tab bar, and reports nowhere where the area
    starts. The helper reads the console's size and reports it to the host. slate takes the
    pane area to fill the bottom right of the terminal, with the sidebar to its left and the
    tab bar above, and adds the difference in size to the pane's cells.
@@ -197,8 +199,8 @@ redraw_on_focus_gained = false
 ```
 
 Apply it with `herdr server reload-config`. With the setting off, the image stays in
-place when the window returns to the front and the block does not blink (measured on
-Herdr 0.8.2: four returns to the front, no wipe). Herdr uses the repaint to clear display
+place when the window returns to the front and the block does not blink (measured: four
+returns to the front, no wipe). Herdr uses the repaint to clear display
 corruption left while the window was in the background, so with the setting off such
 corruption stays until Herdr's next full redraw.
 
@@ -211,16 +213,15 @@ again every two seconds to follow a change of scheme.
 
 Limits found so far:
 
-- A Herdr pane does not answer `CSI 16 t`, so slate assumes a cell of 10 by 20 pixels,
-  which is what Windows Terminal reports at every font size.
+- Herdr has no call that reports the pixel size of a cell. slate uses 10 by 20 pixels,
+  the cell Windows Terminal draws Sixel on at every font size, and does not ask the pane
+  with `CSI 16 t`, whose answer is for the pane and not for the terminal behind Herdr.
+  `SLATE_CELL=WxH` sets another size.
 - With `redraw_on_focus_gained` on, the block is empty for about 6 ms after Herdr
   repaints on focus: 1 to 2 ms until the helper has seen the same cells twice, and about
   5 ms to write the image. Acting on the first look could put a write inside Herdr's
   output. Herdr wraps each frame in a synchronized update (`CSI ?2026`), which it ends
   itself, so slate cannot hold the terminal's painting across the gap.
-- Herdr 0.8.2 reports the cell size (`pane.graphics.info`) only with
-  `experimental.kitty_graphics` turned on. slate uses the answer when it gets one. Herdr
-  0.9.5 has no `pane.graphics.info`, so there slate always uses 10 by 20 pixels.
 - A Herdr layout with the sidebar on the right, or a bar below the pane area, would put
   the image in the wrong place.
 - If Herdr repaints while a popup covers part of the block, the rest of the block stays
