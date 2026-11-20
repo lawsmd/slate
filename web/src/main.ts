@@ -10,6 +10,7 @@ import { toDoc } from "./doc";
 import { defaultTarget, parse, target, type Exported, type Target } from "./targets";
 import { defaultRender, renderCompartment, renderConfig, trackFocus, type RenderConfig } from "./config";
 import { blink, setSteady } from "./blink";
+import { scrollbar } from "./scrollbar";
 import { applyEdit, editMarks, origin, written, writtenText, type Edit } from "./edits";
 import { notifyHost, resolveHost } from "./host";
 import { openLanguagePicker } from "./langpicker";
@@ -127,6 +128,7 @@ const view = new EditorView({
       history(),
       drawSelection({ cursorBlinkRate: 0 }), // blink.ts blinks the cursor
     blink,
+      scrollbar,
       EditorView.lineWrapping,
       EditorState.tabSize.of(4),
       keymap.of([...slateKeymap, ...completionKeymap]),

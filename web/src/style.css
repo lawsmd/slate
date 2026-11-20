@@ -42,6 +42,11 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--sl-bg)
 
 #root .sl-dim { color: var(--sl-dim); }
 
+/* See scrollbar.ts. The lines' right padding leaves it room. */
+#root .sl-scrollbar { position: absolute; top: 4px; right: 3px; bottom: 4px; width: 7px; z-index: 5;
+  border-radius: 4px; background: var(--sl-border); pointer-events: none; }
+#root .sl-scrollbar-thumb { width: 100%; border-radius: 4px; background: var(--sl-fg); opacity: 0.7; }
+
 /* What the target cannot carry as written. */
 #root .sl-unsupported { text-decoration: underline wavy var(--sl-warning); text-underline-offset: 3px; }
 
