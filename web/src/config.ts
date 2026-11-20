@@ -8,6 +8,8 @@ import { EditorView } from "@codemirror/view";
  *   reaches them.
  * - `block`: the Jira behaviour. The construct is drawn as a box or widget
  *   and its syntax shows only while the cursor is on the syntax line itself.
+ *   A code block's fences never show: the cursor cannot reach them, and the
+ *   language is chosen from the block's header.
  * - `raw`: the Markdown text as typed.
  *
  * A construct with no renderer for `block` is drawn as `live`.

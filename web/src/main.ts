@@ -11,6 +11,7 @@ import { defaultTarget, parse, target, type Exported, type Target } from "./targ
 import { defaultRender, renderCompartment, renderConfig, trackFocus, type RenderConfig } from "./config";
 import { blink, setSteady } from "./blink";
 import { scrollbar } from "./scrollbar";
+import { blocks } from "./blocks";
 import { applyEdit, editMarks, origin, written, writtenText, type Edit } from "./edits";
 import { notifyHost, resolveHost } from "./host";
 import { openLanguagePicker } from "./langpicker";
@@ -93,7 +94,13 @@ const closeFence = EditorView.inputHandler.of((view, from, to, text) => {
 let current: Target = target(defaultTarget);
 
 const language = (tg: Target) =>
-  markdown({ base: commonmarkLanguage, extensions: tg.syntax, codeLanguages: languages, completeHTMLTags: false });
+  markdown({
+    base: commonmarkLanguage,
+    extensions: tg.syntax,
+    codeLanguages: languages,
+    completeHTMLTags: false,
+    addKeymap: false, // blocks.ts binds Enter and Backspace
+  });
 const languageCompartment = new Compartment();
 
 /** Underlines what the current target cannot carry as written. */
@@ -139,6 +146,7 @@ const view = new EditorView({
       trackFocus,
       liveField,
       closeFence,
+      blocks,
       autocompletion({ override: [mentionSource], icons: false }),
       keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
       editMarks,

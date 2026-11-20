@@ -323,9 +323,18 @@ server yet; an agent with a shell uses the commands above.
 
 `Options.Render` sets a style per construct: `slate.Live` (syntax hides until the cursor
 reaches it, as in Obsidian), `slate.Block` (a box or widget, as in Jira) or `slate.Raw`.
-Code blocks and tables default to `Block`, everything else to `Live`. In `Block` style a
-code block's fence line shows while the cursor is on that line, which is how the language
-is typed by hand; `alt+l` or a click on the language label opens the language list.
+Code blocks and tables default to `Block`, everything else to `Live`.
+
+In `Block` style a code block behaves as in Jira. Its fences never show and the cursor
+cannot reach them: Down on the last line and Up on the first leave the block, adding an
+empty line when the block ends or starts the document. Backspace in an empty block deletes
+it. `ctrl+a` inside a block selects its text, and a second `ctrl+a` selects the whole
+document. The language is chosen with `alt+l` or a click on the language label; text
+pasted into a block with no language is named by `flourite` when it can tell.
+
+In a list, Enter on an empty item ends the list on that line, and `shift+enter` adds a
+line inside the item, so `shift+enter` then Enter starts the next item one blank line
+down.
 
 ## Markdown and ADF
 

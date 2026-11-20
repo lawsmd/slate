@@ -99,7 +99,8 @@ again at each key press or click. `SteadyCursor` in `slate.Options`, which
 
 The block uses these keys when it receives them: `ctrl+c` and `ctrl+x` (copy and cut to
 the system clipboard), `ctrl+z` and `ctrl+y`, `ctrl+b`, `ctrl+i` and `ctrl+e` (bold,
-italic, inline code), `alt+l` (choose a code block's language), `ctrl+backspace`, and
+italic, inline code), `alt+l` (choose a code block's language), `ctrl+a` (select a code
+block's text, then everything), `shift+enter` (a new line inside a list item), `ctrl+backspace`, and
 `tab` (indent). A host that uses one of them, such as `ctrl+c` to quit or `tab` to change
 panel, must take it before the block does, as in the `switch` above.
 

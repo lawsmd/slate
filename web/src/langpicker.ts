@@ -8,6 +8,15 @@ const plain = "plain text";
 // Names Jira knows under a different spelling.
 const jiraNames: Record<string, string> = { "c#": "csharp", "f#": "fsharp", "objective-c++": "objective-c" };
 
+/** The name the picker uses for a language named or aliased `name`, or "" when it has none. */
+export function languageName(name: string): string {
+  const lower = name.toLowerCase();
+  const found = languages.find((l) => l.name.toLowerCase() === lower || l.alias.includes(lower));
+  if (!found) return "";
+  const own = found.name.toLowerCase();
+  return jiraNames[own] ?? own;
+}
+
 interface Choice {
   name: string;
   search: string;

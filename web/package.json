@@ -18,7 +18,8 @@
     "@lezer/common": "^1.5.5",
     "@lezer/highlight": "^1.2.5",
     "@lezer/markdown": "^1.8.1",
-    "codemirror": "^6.0.2"
+    "codemirror": "^6.0.2",
+    "flourite": "^1.3.0"
   },
   "devDependencies": {
     "ajv": "^8.20.0",

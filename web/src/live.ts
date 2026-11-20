@@ -205,9 +205,11 @@ function build(state: EditorState): DecorationSet {
           const closed = marks.length >= 2 && doc.lineAt(marks[marks.length - 1].from).number > open.number;
           const inside = touches(open.from, end.to);
           // In live style both fences show while the cursor is anywhere in
-          // the block. In block style a fence shows only on its own line.
-          const showOpen = cfg.code === "live" ? inside : touches(open.from, open.to);
-          const showClose = cfg.code === "live" ? inside : touches(end.from, end.to);
+          // the block. In block style the fences of a closed block never
+          // show (blocks.ts keeps the cursor off them); an open fence with
+          // no closing one shows while the cursor is on it.
+          const showOpen = cfg.code === "live" ? inside : !closed && touches(open.from, open.to);
+          const showClose = cfg.code === "live" && inside;
           for (let n = open.number; n <= end.number; n++) {
             const l = doc.line(n);
             const isOpen = n === open.number;

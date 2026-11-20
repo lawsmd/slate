@@ -186,6 +186,12 @@ func TestEditor(t *testing.T) {
 		t.Fatalf("ADF has no mention: %s", raw)
 	}
 
+	// The cursor is in the code block: the first Ctrl+A selects the block's
+	// text, the second the whole document.
+	ed.Key(Key{Name: "a", Mod: Ctrl})
+	if sel, err := ed.Copy(ctx); err != nil || sel != "x pasted" {
+		t.Fatalf("Copy after one select-all: %q, %v", sel, err)
+	}
 	ed.Key(Key{Name: "a", Mod: Ctrl})
 	if sel, err := ed.Copy(ctx); err != nil || sel != want {
 		t.Fatalf("Copy after select-all: %q, %v", sel, err)
