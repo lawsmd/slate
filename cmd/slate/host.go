@@ -246,6 +246,14 @@ func (h *host) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		h.ed.SetTheme(slate.Theme{Foreground: msg.String()})
 		return h, nil
 	case tea.KeyPressMsg:
+		// SLATE_KEYLOG names a file that gets each key press as the terminal
+		// reported it, for working out why a key does nothing.
+		if path := os.Getenv("SLATE_KEYLOG"); path != "" {
+			if f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+				fmt.Fprintf(f, "%s: %+v\n", msg.String(), tea.Key(msg))
+				f.Close()
+			}
+		}
 		switch msg.String() {
 		case "ctrl+q":
 			return h, tea.Quit
@@ -254,11 +262,9 @@ func (h *host) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "f1":
 			h.help = !h.help
 			h.ed.Focus(!h.help)
-			if !h.help {
-				// The popup's text erased the image under it.
-				return h, h.block.Redraw()
-			}
-			return h, nil
+			// The block draws no image while the popup is over it, and
+			// the whole image when the popup has gone.
+			return h, h.block.Cover(h.help)
 		}
 		if h.help {
 			return h, nil
@@ -303,8 +309,9 @@ func (h *host) View() tea.View {
 	if h.path != "" {
 		title = filepath.Base(h.path)
 	}
+	modified := ""
 	if h.ed.Modified() {
-		title += warn.Render(" (modified)")
+		modified = warn.Render(" (modified)")
 	}
 
 	// The popup is drawn over the block's blank cells.
@@ -325,7 +332,7 @@ func (h *host) View() tea.View {
 	}
 
 	var b strings.Builder
-	b.WriteString(" " + accent.Render("slate") + "  " + title + "\n")
+	b.WriteString(" " + accent.Render(title) + modified + "\n")
 	b.WriteString(dim.Render("╭"+strings.Repeat("─", inner)+"╮") + "\n")
 	blank := strings.Repeat(" ", inner)
 	for r := 0; r < rows; r++ {

@@ -1,6 +1,7 @@
 package slate
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -58,6 +59,9 @@ func windowsTerminalTheme(data []byte, profileID string) (Theme, bool) {
 			SelectionBackground string `json:"selectionBackground"`
 		} `json:"schemes"`
 	}
+	// A program that rewrites the file, such as PowerShell, may start it
+	// with a byte-order mark.
+	data = bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))
 	if json.Unmarshal(plainJSON(data), &settings) != nil {
 		return Theme{}, false
 	}

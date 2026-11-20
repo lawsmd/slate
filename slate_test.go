@@ -90,6 +90,9 @@ func TestWindowsTerminalTheme(t *testing.T) {
 	if !ok || got.Background != "#000000" || got.Foreground != "#ffffff" || !strings.HasPrefix(got.MonoFont, `"Fira // Code"`) {
 		t.Fatalf("default profile: %+v, %v", got, ok)
 	}
+	if got, ok := windowsTerminalTheme(append([]byte("\xef\xbb\xbf"), settings...), ""); !ok || got.Background != "#000000" {
+		t.Fatalf("settings that start with a byte-order mark: %+v, %v", got, ok)
+	}
 	got, _ = windowsTerminalTheme(settings, "{B}")
 	if got.Background != "#010203" || got.Foreground != "#111111" || got.Selection != "#cccccc" {
 		t.Fatalf("profile with its own scheme and background: %+v", got)

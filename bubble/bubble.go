@@ -63,6 +63,7 @@ type Model struct {
 	winW, winH int                // the host's window in cells
 	redraws    int                // counts calls to Redraw; only the newest one draws
 	partials   int                // counts draws of changed rows; the newest one settles
+	covered    bool               // the host shows something over the block
 }
 
 // New wraps an editor. The caller still owns the editor and closes it.
@@ -198,13 +199,28 @@ func (m *Model) SetRect(x, y, w, h int) tea.Cmd {
 	return m.Redraw()
 }
 
-// Redraw repaints the whole block shortly after the current frame. Call it
-// when something was drawn over the block and has gone, such as a popup.
-// Calls made close together end in one repaint.
+// Redraw repaints the whole block shortly after the current frame. Calls
+// made close together end in one repaint. For a popup over the block, use
+// Cover.
 func (m *Model) Redraw() tea.Cmd {
 	m.redraws++
 	n := m.redraws
 	return tea.Tick(redrawDelay, func(time.Time) tea.Msg { return redrawMsg(n) })
+}
+
+// Cover tells the model that the host shows something over the block, such
+// as a popup, or has stopped doing so. While the block is covered the model
+// writes no image, which would hide what the host drew. The editor keeps
+// its changes and the model draws them when the cover is gone.
+func (m *Model) Cover(on bool) tea.Cmd {
+	if m.covered == on {
+		return nil
+	}
+	m.covered = on
+	if on {
+		return nil
+	}
+	return m.Redraw()
 }
 
 // Contains reports whether window cell (x, y) is inside the block.
@@ -317,6 +333,9 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 // draw writes the editor's picture: the rows that changed, or every row
 // for the other kinds.
 func (m *Model) draw(kind Kind) tea.Cmd {
+	if m.covered {
+		return nil // Cover(false) draws the whole block
+	}
 	if kind != Rows {
 		m.ed.Invalidate()
 	}
@@ -412,6 +431,12 @@ func (m *Model) key(k tea.KeyPressMsg) tea.Cmd {
 // for a press the editor has no use for.
 func translate(k tea.KeyPressMsg) (key slate.Key, text string, ok bool) {
 	key.Mod = mods(k.Mod)
+	if (k.Code == 'h' || k.Code == 'w') && key.Mod == slate.Ctrl {
+		// A terminal sends Ctrl+Backspace as the byte Ctrl+H makes. Ctrl+W
+		// deletes a word in a shell, and some terminal settings send it for
+		// Ctrl+Backspace. The editor has no other use for either.
+		return slate.Key{Name: "Backspace", Mod: slate.Ctrl}, "", true
+	}
 	switch name, special := keyNames[k.Code]; {
 	case special:
 		key.Name = name

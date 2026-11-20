@@ -24,6 +24,10 @@ func TestTranslate(t *testing.T) {
 			slate.Key{Name: "ArrowLeft", Mod: slate.Shift}, "", true},
 		{"space", tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}, slate.Key{Name: " "}, "", true},
 		{"a shortcut", tea.KeyPressMsg{Code: 'b', Mod: tea.ModCtrl}, slate.Key{Name: "b", Mod: slate.Ctrl}, "", true},
+		{"ctrl+backspace as the terminal sends it", tea.KeyPressMsg{Code: 'h', Mod: tea.ModCtrl},
+			slate.Key{Name: "Backspace", Mod: slate.Ctrl}, "", true},
+		{"the shell's delete-word key", tea.KeyPressMsg{Code: 'w', Mod: tea.ModCtrl},
+			slate.Key{Name: "Backspace", Mod: slate.Ctrl}, "", true},
 		{"composed input", tea.KeyPressMsg{Text: "日本"}, slate.Key{}, "日本", false},
 		{"a key with no use", tea.KeyPressMsg{Code: tea.KeyF13}, slate.Key{}, "", false},
 	} {
