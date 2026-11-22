@@ -191,6 +191,33 @@ visible at once inside Herdr are not tested: each would start its own helper pro
 writing to the same console. Close a block before opening the next, or keep one block
 and swap its text with `SetMarkdown`.
 
+## Still pictures
+
+`bubble.OpenPicture` makes a block that shows an `image.Image`, drawn as the editor's
+block is and with no browser behind it. It suits a host that shows the pictures of a
+document beside the text it draws in cells.
+
+```go
+pic, err := bubble.OpenPicture(img, bubble.PictureConfig{Background: "#1e1e2e"})
+w, h := pic.Fit(cols, rows)          // the cells it takes, scaled down to fit
+cmd := pic.Show(whole, view)         // where it is, and where it may be drawn
+```
+
+- `Fit` never enlarges a picture. Its answer changes when the terminal reports the size
+  of a cell, so ask again at each layout.
+- `Show` takes the cells of the whole picture, which may reach outside the window, and
+  the part of the window it may be drawn in. A host that scrolls gives the place the
+  picture has scrolled to and the area of its scrolling column, and the block draws the
+  rows in view.
+- The host shows blank cells where the picture is, in a colour it uses nowhere else
+  beside them. The cells a picture leaves then change, the host's renderer writes them
+  again, and that clears the image from them.
+- `Init`, `Update`, `Cover` and `Close` are wired as the editor block's are. A picture
+  ignores another block's messages, so every block gets every unconsumed message.
+- `Close` waits a moment inside Herdr while the image is removed. Close several pictures
+  each in a goroutine of its own.
+- Inside Herdr each picture starts a helper process of its own.
+
 ## Checklist
 
 - `block.Init()` is returned from the host's `Init`.

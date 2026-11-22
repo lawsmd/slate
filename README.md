@@ -365,7 +365,7 @@ attachments (`web/src/targets/jira-import.ts`).
 | `wt.go` | colours and font from Windows Terminal's settings |
 | `browser/` | finds and starts Edge, DevTools protocol over a pipe |
 | `sixel/` | colour quantiser and Sixel encoder |
-| `bubble/` | Bubble Tea v2 adapter: `Open`, the block, its painters |
+| `bubble/` | Bubble Tea v2 adapter: `Open`, the block, its painters, and `OpenPicture` for a still picture |
 | `examples/embed/` | a small host with a comment box in a panel |
 | `EMBEDDING.md` | how to put a block in another program |
 | `link/` | reading and editing open editors from another program |
