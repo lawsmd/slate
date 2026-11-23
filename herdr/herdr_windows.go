@@ -36,10 +36,28 @@ func init() {
 	}
 }
 
+// dialWait is how long dial keeps trying a pipe that is busy, and dialPause
+// the time between two tries.
+const (
+	dialWait  = 2 * time.Second
+	dialPause = 10 * time.Millisecond
+)
+
 // dial connects to Herdr's API. On Windows the socket is a named pipe named
-// after the socket path.
+// after the socket path. Windows refuses a client while every instance of
+// the pipe has one, as happens when several blocks open at once, each with
+// its own connection. dial tries again until an instance is free.
 func dial(socket string) (io.ReadWriteCloser, error) {
-	return os.OpenFile(`\\.\pipe\`+socket, os.O_RDWR, 0)
+	name := `\\.\pipe\` + socket
+	for deadline := time.Now().Add(dialWait); ; time.Sleep(dialPause) {
+		f, err := os.OpenFile(name, os.O_RDWR, 0)
+		if err == nil {
+			return f, nil
+		}
+		if !errors.Is(err, windows.ERROR_PIPE_BUSY) || time.Now().After(deadline) {
+			return nil, err
+		}
+	}
 }
 
 func startHelper(socket string) (io.WriteCloser, io.Reader, func(), error) {
