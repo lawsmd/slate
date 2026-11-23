@@ -53,6 +53,7 @@ type Picture struct {
 	winW, winH   int   // the host's window in cells
 	cellW, cellH int   // the pixel size of one cell
 	covered      bool  // the host shows something over the block
+	moving       bool  // the host moved the picture; nothing draws before the redraw
 	painted      *Rect // where the painter last wrote the image
 	redraws      int   // counts calls to Redraw; only the newest one draws
 	draws        int
@@ -203,8 +204,16 @@ func (p *Picture) Show(whole, view Rect) tea.Cmd {
 		return nil
 	}
 	p.whole, p.view = whole, view
-	if _, visible := p.target(); !visible {
+	p.latest.Add(1) // a draw still encoding was made for the old place
+	at, visible := p.target()
+	if !visible {
 		return p.hide()
+	}
+	if p.painted != nil && *p.painted != at {
+		// As in Model.SetRect: the cells the picture leaves look wiped, and
+		// a draw before the redraw could be left behind.
+		p.paint.Leave()
+		p.moving = true
 	}
 	return p.Redraw()
 }
@@ -215,6 +224,7 @@ func (p *Picture) hide() tea.Cmd {
 	old := p.painted
 	p.painted = nil
 	p.latest.Add(1)
+	p.paint.Leave()
 	if old == nil || !p.paint.Detached() {
 		return nil
 	}
@@ -259,6 +269,7 @@ func (p *Picture) Cover(on bool) tea.Cmd {
 	p.covered = on
 	if on {
 		p.latest.Add(1)
+		p.paint.Leave() // as Model.Cover does
 		return nil
 	}
 	return p.Redraw()
@@ -274,6 +285,7 @@ func (p *Picture) Update(msg tea.Msg) tea.Cmd {
 		switch msg.kind {
 		case picRedraw:
 			if msg.n == p.redraws {
+				p.moving = false
 				return p.draw()
 			}
 		case picWiped:
@@ -347,8 +359,8 @@ func (p *Picture) moved() tea.Cmd {
 // draw writes the visible part of the picture. The scaling and encoding run
 // in the command, off the host's update loop.
 func (p *Picture) draw() tea.Cmd {
-	if p.covered {
-		return nil // Cover(false) draws
+	if p.covered || p.moving {
+		return nil // Cover(false) or the redraw after the move draws
 	}
 	at, visible := p.target()
 	if !visible {

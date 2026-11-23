@@ -64,6 +64,7 @@ type Model struct {
 	redraws    int                // counts calls to Redraw; only the newest one draws
 	partials   int                // counts draws of changed rows; the newest one settles
 	covered    bool               // the host shows something over the block
+	moving     bool               // the host moved the block; nothing draws before the redraw
 
 	// Set by Open, which made the editor and chose the painter.
 	owned     bool        // Close closes the editor and the host's painter
@@ -215,6 +216,7 @@ func (m *Model) moved() tea.Cmd {
 	m.place()
 	if m.painted != nil && (!visible || *m.painted != now) {
 		// The terminal shows another view. Parts of the image remain in it.
+		m.paint.Leave()
 		old := *m.painted
 		m.painted = nil
 		return tea.Tick(eraseDelay, func(time.Time) tea.Msg { return eraseMsg(old) })
@@ -244,6 +246,14 @@ func (m *Model) SetRect(x, y, w, h int) tea.Cmd {
 	}
 	m.x, m.y, m.w, m.h = x, y, w, h
 	m.place()
+	if at, _ := m.target(); m.painted != nil && *m.painted != at {
+		// The host's next frame blanks the cells the block leaves. The
+		// painter must not take that for a wipe and write the image there
+		// again. A draw before the redraw could be left behind too: the
+		// terminal may never show the frame for this place.
+		m.paint.Leave()
+		m.moving = true
+	}
 	return m.Redraw()
 }
 
@@ -266,6 +276,7 @@ func (m *Model) Cover(on bool) tea.Cmd {
 	}
 	m.covered = on
 	if on {
+		m.paint.Leave() // a painter that writes again after a wipe would draw over the cover
 		return nil
 	}
 	return m.Redraw()
@@ -312,6 +323,7 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 		if int(msg) != m.redraws {
 			return nil // a later Redraw is on its way
 		}
+		m.moving = false
 		return m.draw(Placed)
 	case wipedMsg:
 		// Something repainted the block's cells, as Herdr does when its
@@ -389,8 +401,8 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 // draw writes the editor's picture: the rows that changed, or every row
 // for the other kinds.
 func (m *Model) draw(kind Kind) tea.Cmd {
-	if m.covered {
-		return nil // Cover(false) draws the whole block
+	if m.covered || m.moving {
+		return nil // Cover(false) or the redraw after the move draws the whole block
 	}
 	if kind != Rows {
 		m.ed.Invalidate()

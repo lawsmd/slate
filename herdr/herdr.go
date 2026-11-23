@@ -18,7 +18,8 @@
 // keyboard focus back, and that removes the image. Draw marks the block's
 // cells with a colour that shows on no blank cell, and the helper watches
 // them. When Herdr has written over the marks, Wiped signals and the host
-// draws again.
+// draws again. The host ends the watch with Unwatch before it moves the
+// block, whose old cells Herdr then writes over as it does in a repaint.
 package herdr
 
 import (
@@ -133,6 +134,12 @@ func (p *Pane) Draw(x, y, w, h int, seq []byte) error {
 // marks as they are. The helper remembers this image and writes it again
 // after a wipe, so call it when the block has changed since the last Draw.
 func (p *Pane) Refresh(seq []byte) error { return p.send('K', seq) }
+
+// Unwatch ends the watch that Draw started and makes the helper forget the
+// image it kept. Call it when the host moves or covers the block: the cells
+// the block leaves turn blank, which the helper would take for a wipe, and
+// it would write the image again in the place the block has left.
+func (p *Pane) Unwatch() error { return p.send('U', nil) }
 
 // CellSize returns the pixel size of one cell of the outer terminal, for a
 // Sixel image. The helper writes to a Windows console, and Windows Terminal,

@@ -227,6 +227,11 @@ func helper(pid int) error {
 			c.image = payload[16:]
 			c.note("draw %d bytes at %d,%d %dx%d", len(c.image), c.x, c.y, c.w, c.h)
 			c.repaint()
+		case head[0] == 'U':
+			// The host moves or covers the block. The cells it leaves must
+			// not be taken for a wipe.
+			c.w, c.image = 0, nil
+			c.note("unwatch")
 		case head[0] == 'E' && len(payload) == 16:
 			c.w = 0
 			c.note("erase")
@@ -334,9 +339,10 @@ func (c *console) read(x, y, w, h int, cells []charInfo) int {
 
 // repaint writes the marks and the image over them. The marks go first: a
 // space written to a cell removes the image there. One write keeps the block
-// from showing empty in between.
+// from showing empty in between. The marks reset the colours first: on the
+// background Herdr last wrote with, a mark would read as a cell of Herdr's.
 func (c *console) repaint() {
-	seq := []byte("\x1b7\x1b[34m") // DECSC keeps Herdr's cursor and colours
+	seq := []byte("\x1b7\x1b[0;34m") // DECSC keeps Herdr's cursor and colours
 	for r := 0; r < c.h; r++ {
 		seq = append(seq, fmt.Sprintf("\x1b[%d;%dH%s", c.y+r+1, c.x+1, strings.Repeat(" ", c.w))...)
 	}

@@ -35,6 +35,10 @@ type Painter interface {
 	Changes() <-chan struct{}
 	// Draw writes seq, which the editor made for the place at.
 	Draw(at Rect, seq []byte, kind Kind) tea.Cmd
+	// Leave tells the painter that the host moves or covers the block. A
+	// painter that writes the image again after a wipe stops doing so
+	// until the next Placed draw: the cells the block leaves look wiped.
+	Leave()
 	// Erase removes what is left of the image in a place it has left.
 	Erase(at Rect)
 	// Wiped signals that something else removed the image and a Placed
@@ -56,6 +60,7 @@ type stdout struct{}
 func (stdout) Place(_, _ int, r Rect) (Rect, bool)     { return r, true }
 func (stdout) Changes() <-chan struct{}                { return nil }
 func (stdout) Draw(_ Rect, seq []byte, _ Kind) tea.Cmd { return tea.Raw(string(seq)) }
+func (stdout) Leave()                                  {}
 func (stdout) Erase(Rect)                              {}
 func (stdout) Wiped() <-chan struct{}                  { return nil }
 func (stdout) CellSize() (int, int, bool)              { return 0, 0, false }
@@ -95,6 +100,7 @@ func (h herdrPainter) Draw(at Rect, seq []byte, kind Kind) tea.Cmd {
 	return nil
 }
 
+func (h herdrPainter) Leave()                     { h.pane.Unwatch() }
 func (h herdrPainter) Erase(at Rect)              { h.pane.EraseBlank(at.X, at.Y, at.W, at.H) }
 func (h herdrPainter) Wiped() <-chan struct{}     { return h.pane.Wiped() }
 func (h herdrPainter) CellSize() (int, int, bool) { return h.pane.CellSize() }

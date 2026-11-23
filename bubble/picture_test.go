@@ -10,12 +10,16 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// recorder is a painter that keeps what it is asked to draw.
+// recorder is a painter that keeps what it is asked to draw and counts the
+// times it is told the block leaves its place.
 type recorder struct {
 	stdout
-	at   []Rect
-	seqs [][]byte
+	at     []Rect
+	seqs   [][]byte
+	leaves int
 }
+
+func (r *recorder) Leave() { r.leaves++ }
 
 func (r *recorder) Draw(at Rect, seq []byte, _ Kind) tea.Cmd {
 	r.at = append(r.at, at)
@@ -138,5 +142,59 @@ func TestShrinkKeepsThePictureOverItsBackground(t *testing.T) {
 	}
 	if got := dst.RGBAAt(2, 2); got != (color.RGBA{}) {
 		t.Errorf("a pixel outside the picture was written: %+v", got)
+	}
+}
+
+func TestMovedPictureLeavesItsPlaceBeforeItDraws(t *testing.T) {
+	p, rec := testPicture(t, 400, 200) // 40 by 10 cells
+	view := Rect{X: 0, Y: 0, W: 100, H: 30}
+	run(p, p.Show(Rect{X: 5, Y: 12, W: 40, H: 10}, view))
+	if len(rec.at) != 1 || rec.leaves != 0 {
+		t.Fatalf("after the first Show: %d draws and %d leaves, want 1 and 0", len(rec.at), rec.leaves)
+	}
+
+	// The host scrolls. The painter hears of it before the host's frame
+	// blanks the cells, and nothing draws until the redraw.
+	redraw := p.Show(Rect{X: 5, Y: 9, W: 40, H: 10}, view)
+	if rec.leaves != 1 {
+		t.Fatalf("%d leaves after the move, want 1", rec.leaves)
+	}
+	if cmd := p.Update(p.msg(picAgain)); cmd != nil || len(rec.at) != 1 {
+		t.Fatalf("a draw between the move and its redraw: %d draws", len(rec.at))
+	}
+	run(p, redraw)
+	if len(rec.at) != 2 || rec.at[1] != (Rect{X: 5, Y: 9, W: 40, H: 10}) {
+		t.Fatalf("drawn at %+v, want the new place last", rec.at)
+	}
+	if cmd := p.Update(p.msg(picAgain)); cmd == nil {
+		t.Fatal("no draw after the redraw")
+	}
+
+	// The same place again is no move.
+	p.Show(Rect{X: 5, Y: 9, W: 40, H: 10}, view)
+	if rec.leaves != 1 {
+		t.Fatalf("%d leaves after a Show that changed nothing, want 1", rec.leaves)
+	}
+}
+
+func TestPictureDrawStartedBeforeAMoveWritesNothing(t *testing.T) {
+	p, rec := testPicture(t, 400, 200)
+	view := Rect{X: 0, Y: 0, W: 100, H: 30}
+	tick := p.Show(Rect{X: 5, Y: 12, W: 40, H: 10}, view)
+	encode := p.Update(tick()) // the draw, not yet scaled or encoded
+	if encode == nil {
+		t.Fatal("the redraw started no draw")
+	}
+	p.Show(Rect{X: 5, Y: 9, W: 40, H: 10}, view)
+	if msg := encode(); msg != nil || len(rec.at) != 0 {
+		t.Fatalf("the draw for the old place wrote %+v", rec.at)
+	}
+}
+
+func TestCoveredPictureLeavesItsPlace(t *testing.T) {
+	p, rec := testPicture(t, 400, 200)
+	p.Cover(true)
+	if rec.leaves != 1 {
+		t.Fatalf("%d leaves, want 1", rec.leaves)
 	}
 }

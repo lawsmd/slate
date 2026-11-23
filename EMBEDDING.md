@@ -77,7 +77,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 ```
 
 - `SetRect(x, y, w, h)` takes window cells counted from 0. Call it whenever the layout
-  changes. It returns a command; return it from `Update`.
+  changes. It returns a command; return it from `Update`. The image follows 50 ms after
+  the last call, so a block that moves with a scrolling host shows the host's blank cells
+  until the scrolling stops.
 - `View()` returns `h` rows of `w` spaces. Put them at the rectangle's place in the host's
   view. The host must not draw anything else in those cells: text written over a cell
   erases the image there.

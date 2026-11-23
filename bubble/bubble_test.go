@@ -165,3 +165,24 @@ func TestCellSizeComesFromWhereTheImageIsDrawn(t *testing.T) {
 		}
 	}
 }
+
+func TestCoveredBlockLeavesItsPlace(t *testing.T) {
+	rec := &recorder{}
+	m := &Model{paint: rec}
+	m.Cover(true)
+	m.Cover(true)
+	if rec.leaves != 1 {
+		t.Fatalf("%d leaves, want 1", rec.leaves)
+	}
+}
+
+func TestMovedBlockDrawsNothingBeforeItsRedraw(t *testing.T) {
+	// The model has no editor: a draw that went on would fail.
+	rec := &recorder{}
+	m := &Model{paint: rec, moving: true}
+	for _, kind := range []Kind{Rows, Whole, Placed} {
+		if cmd := m.draw(kind); cmd != nil || len(rec.at) != 0 {
+			t.Fatalf("draw of kind %d went on during a move", kind)
+		}
+	}
+}

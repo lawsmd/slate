@@ -150,7 +150,10 @@ Herdr pane: it fails when Herdr no longer has a call, an event or a field slate 
    cells every 4 ms, and every millisecond for 150 ms after the terminal's window comes to
    the front. When some have lost the colour and all of those are blank, the helper writes
    the last whole image again and slate follows with the current one. While any cell holds
-   text, a popup covers the block, and slate waits for it to go.
+   text, a popup covers the block, and slate waits for it to go. Before the host moves or
+   covers the block, slate tells the helper to stop watching and to forget the image: the
+   host's next frame blanks the cells the block leaves, and the helper would write the
+   image there again. The watch starts again with the whole image at the new place.
 5. slate sends the helper the whole image 250 ms after the last changed rows, so the image
    the helper writes after a wipe is the current one.
 6. When the pane reports that it has the keyboard focus again, slate also writes the
@@ -185,7 +188,9 @@ bubble.Register(bubble.Host{
 ```
 
 A registered host is tried before slate's own. `bubble.Config.Painter` skips the search and
-uses the painter it names.
+uses the painter it names. The model calls the painter's `Leave` before the host moves or
+covers the block. A painter that writes the image again by itself after a wipe stops then,
+until the next draw of kind `Placed`.
 
 ### Focus blink
 
@@ -231,7 +236,9 @@ Limits found so far:
 - With two clients attached to one Herdr session, slate draws in the first it finds.
 
 Set `SLATE_HERDR_LOG` to a file path and the helper writes there what it finds in the
-marked cells: `marked`, `wiped`, or `covered` with the cell that holds text.
+marked cells: `marked`, `wiped`, or `covered` with the cell that holds text. It also
+writes `draw` with the place of each whole image, `unwatch` when the host moves or covers
+the block, and `erase`.
 
 `cmd/slate-probe` holds the experiments behind this: `-pid` writes a test image to another
 process's console, `-queries` lists what the current terminal answers, `-api` sends one
