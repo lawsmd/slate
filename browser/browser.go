@@ -82,7 +82,10 @@ func Launch(opts Options) (*Browser, error) {
 		"--disable-extensions",
 		"--disable-background-networking",
 		"--disable-sync",
-		"--disable-features=Translate,msEdgeSidebarV2",
+		// msWindowTabManagerPublic is Edge asking Explorer to list each tab
+		// in the Alt-Tab switcher. Explorer keeps the entry after a headless
+		// Edge exits, and the user can neither switch to it nor close it.
+		"--disable-features=Translate,msEdgeSidebarV2,msWindowTabManagerPublic",
 		"--hide-scrollbars",
 		"--mute-audio",
 		"--force-device-scale-factor=1",
