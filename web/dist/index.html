@@ -111,7 +111,9 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--sl-bg)
 #root .cm-line.sl-code-head { padding-top: 3px; text-align: right; font-family: var(--sl-font); }
 #root .cm-line.sl-code-foot { padding-left: 12px; font-size: 5px; line-height: 8px; }
 /* The background of a code line hides the selection layer behind it. See selected.ts. */
-#root .cm-line.sl-code.sl-sel-line { background: var(--sl-selection); }
+/* Only the content box: the line numbers sit in the padding and are never selected. */
+#root .cm-line.sl-code.sl-sel-line {
+  background: linear-gradient(var(--sl-selection), var(--sl-selection)) content-box, var(--sl-code-bg); }
 #root .cm-line.sl-code .sl-sel, #root .sl-icode .sl-sel, #root .sl-sel .sl-icode { background: var(--sl-selection); }
 #root .sl-lang { padding: 0 7px; border: 1px solid var(--sl-border); border-radius: 4px;
   color: var(--sl-dim); font-size: 0.9em; cursor: pointer; }
