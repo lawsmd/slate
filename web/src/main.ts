@@ -11,6 +11,7 @@ import { defaultTarget, parse, target, type Exported, type Target } from "./targ
 import { defaultRender, renderCompartment, renderConfig, trackFocus, type RenderConfig } from "./config";
 import { blink, setSteady } from "./blink";
 import { scrollbar } from "./scrollbar";
+import { showSelection } from "./selected";
 import { blocks } from "./blocks";
 import { applyEdit, editMarks, origin, written, writtenText, type Edit } from "./edits";
 import { notifyHost, resolveHost } from "./host";
@@ -135,6 +136,7 @@ const view = new EditorView({
       history(),
       drawSelection({ cursorBlinkRate: 0 }), // blink.ts blinks the cursor
     blink,
+      showSelection,
       scrollbar,
       EditorView.lineWrapping,
       EditorState.tabSize.of(4),
